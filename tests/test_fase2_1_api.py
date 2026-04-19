@@ -15,13 +15,14 @@ def test_fase2_1_tryon_run_ok(tmp_path: Path, monkeypatch) -> None:
     src.write_bytes(b"fake-image")
 
     def fake_run(request):
+        assert request.garment_type == "shirt"
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_bytes(b"fake-output")
         return {
             "status": "ok",
             "output_path": str(out),
             "scale": 1.23,
-            "meta": {"baseline": True},
+            "meta": {"baseline": True, "garment_type": request.garment_type},
         }
 
     monkeypatch.setattr(api_main, "_run_fase21_tryon", fake_run)
@@ -32,6 +33,7 @@ def test_fase2_1_tryon_run_ok(tmp_path: Path, monkeypatch) -> None:
             "image_path": str(src),
             "garment_path": "data/raw/models/TShirts.obj",
             "output_path": str(out),
+            "garment_type": "shirt",
         },
     )
 
@@ -39,6 +41,7 @@ def test_fase2_1_tryon_run_ok(tmp_path: Path, monkeypatch) -> None:
     data = response.json()
     assert data["status"] == "ok"
     assert data["output_path"] == str(out)
+    assert data["meta"]["garment_type"] == "shirt"
     assert out.exists()
 
 

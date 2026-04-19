@@ -41,6 +41,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate Fase 2.1 batch try-on latency and success")
     parser.add_argument("--input-dir", required=True, help="Directorio de imagenes de persona")
     parser.add_argument("--garment-path", required=True, help="Ruta de prenda (placeholder en baseline)")
+    parser.add_argument(
+        "--garment-type",
+        default="other",
+        choices=["shirt", "skirt", "pants", "dress", "other"],
+        help="Categoria de prenda para ajuste por tipo",
+    )
     parser.add_argument("--output-dir", default="data/processed/fase2_1_eval", help="Directorio salida")
     parser.add_argument("--report", default="data/processed/fase2_1_eval/report.json", help="Reporte JSON")
     parser.add_argument(
@@ -60,6 +66,7 @@ def main() -> None:
     batch = run_tryon_batch(
         input_dir=args.input_dir,
         garment_path=args.garment_path,
+        garment_type=args.garment_type,
         output_dir=args.output_dir,
         report_path=args.report,
         checklist_path=args.checklist_path,

@@ -5,6 +5,11 @@ class TryOnRequest(BaseModel):
     image_path: str = Field(..., description="Ruta de la imagen de persona")
     garment_path: str = Field(..., description="Ruta del recurso de prenda")
     output_path: str = Field(..., description="Ruta de salida para imagen final")
+    garment_type: str = Field(
+        default="other",
+        pattern="^(shirt|skirt|pants|dress|other)$",
+        description="Categoria de prenda para ajuste por tipo",
+    )
 
 
 class TryOnResult(BaseModel):
@@ -17,6 +22,11 @@ class TryOnResult(BaseModel):
 class TryOnBatchRequest(BaseModel):
     input_dir: str = Field(..., description="Directorio de imagenes de persona")
     garment_path: str = Field(..., description="Ruta de prenda usada en batch")
+    garment_type: str = Field(
+        default="other",
+        pattern="^(shirt|skirt|pants|dress|other)$",
+        description="Categoria de prenda usada en batch",
+    )
     output_dir: str = Field(default="data/processed/fase2_1_eval/outputs", description="Directorio de salidas")
     report_path: str = Field(default="data/processed/fase2_1_eval/report.json", description="Ruta de reporte JSON")
     checklist_path: str | None = Field(default=None, description="Ruta opcional del checklist de calidad")

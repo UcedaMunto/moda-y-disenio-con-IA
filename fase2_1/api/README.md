@@ -41,12 +41,15 @@ Ejemplo payload batch:
 {
 	"input_dir": "data/raw/personas",
 	"garment_path": "data/raw/models/TShirts.obj",
+	"garment_type": "shirt",
 	"output_dir": "data/processed/fase2_1_eval/outputs",
 	"report_path": "data/processed/fase2_1_eval/report.json",
 	"checklist_path": "fase2_1/config/quality_checklist.json",
 	"limit": 100
 }
 ```
+
+Categorias permitidas en `garment_type`: `shirt`, `skirt`, `pants`, `dress`, `other`.
 
 Ejemplo payload evaluacion manual:
 

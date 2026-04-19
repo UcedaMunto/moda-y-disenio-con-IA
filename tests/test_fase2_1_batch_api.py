@@ -25,8 +25,8 @@ def test_fase2_1_tryon_batch_ok(tmp_path: Path, monkeypatch) -> None:
             },
             "report_path": str(report),
             "results": [
-                {"image": "a.jpg", "status": "ok", "output_path": "out/a.jpg", "elapsed_ms": 10.1},
-                {"image": "b.jpg", "status": "ok", "output_path": "out/b.jpg", "elapsed_ms": 14.5},
+                {"image": "a.jpg", "status": "ok", "output_path": "out/a.jpg", "garment_type": "pants", "elapsed_ms": 10.1},
+                {"image": "b.jpg", "status": "ok", "output_path": "out/b.jpg", "garment_type": "pants", "elapsed_ms": 14.5},
             ],
         }
 
@@ -37,6 +37,7 @@ def test_fase2_1_tryon_batch_ok(tmp_path: Path, monkeypatch) -> None:
         json={
             "input_dir": str(tmp_path),
             "garment_path": "data/raw/models/TShirts.obj",
+            "garment_type": "pants",
             "output_dir": str(tmp_path / "outs"),
             "report_path": str(report),
             "limit": 10,
@@ -48,6 +49,7 @@ def test_fase2_1_tryon_batch_ok(tmp_path: Path, monkeypatch) -> None:
     assert payload["status"] == "ok"
     assert payload["summary"]["total"] == 2
     assert payload["report_path"] == str(report)
+    assert payload["results"][0]["garment_type"] == "pants"
 
 
 def test_fase2_1_tryon_batch_error(tmp_path: Path, monkeypatch) -> None:
@@ -61,6 +63,7 @@ def test_fase2_1_tryon_batch_error(tmp_path: Path, monkeypatch) -> None:
         json={
             "input_dir": str(tmp_path),
             "garment_path": "data/raw/models/TShirts.obj",
+            "garment_type": "other",
             "output_dir": str(tmp_path / "outs"),
             "report_path": str(tmp_path / "report.json"),
         },

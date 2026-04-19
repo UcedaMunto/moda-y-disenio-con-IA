@@ -28,6 +28,7 @@ def test_run_tryon_batch_writes_report(tmp_path: Path, monkeypatch) -> None:
     result = batch_module.run_tryon_batch(
         input_dir=str(input_dir),
         garment_path="data/raw/models/TShirts.obj",
+        garment_type="dress",
         output_dir=str(output_dir),
         report_path=str(report_path),
         limit=None,
@@ -41,6 +42,7 @@ def test_run_tryon_batch_writes_report(tmp_path: Path, monkeypatch) -> None:
     assert "checklist_version" in result.summary
     assert all("auto_quality_score" in row for row in result.results)
     assert all("manual_review_required" in row for row in result.results)
+    assert all(row.get("garment_type") == "dress" for row in result.results)
     assert report_path.exists()
 
 

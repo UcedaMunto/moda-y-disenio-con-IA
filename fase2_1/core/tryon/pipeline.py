@@ -17,7 +17,7 @@ def run_tryon(request: TryOnRequest) -> TryOnResult:
     if landmarks is None:
         raise ValueError("No se detectaron landmarks de pose")
 
-    scale = compute_scale(landmarks)
+    scale = compute_scale(landmarks, garment_type=request.garment_type)
     seg = segment_person(request.image_path)
 
     src = Path(request.image_path)
@@ -33,6 +33,7 @@ def run_tryon(request: TryOnRequest) -> TryOnResult:
         meta={
             "baseline": True,
             "note": "placeholder output",
+            "garment_type": request.garment_type,
             "segmentation_backend": seg.backend,
             "segmentation_note": seg.note,
         },

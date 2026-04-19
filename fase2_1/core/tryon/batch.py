@@ -19,6 +19,7 @@ def run_tryon_batch(
     garment_path: str,
     output_dir: str,
     report_path: str,
+    garment_type: str = "other",
     checklist_path: str | None = None,
     limit: int | None = None,
 ) -> TryOnBatchResult:
@@ -46,6 +47,7 @@ def run_tryon_batch(
             image_path=str(image),
             garment_path=garment_path,
             output_path=str(out_img),
+            garment_type=garment_type,
         )
         t0 = time.perf_counter()
         try:
@@ -58,6 +60,7 @@ def run_tryon_batch(
                     "image": str(image),
                     "status": res.status,
                     "output_path": res.output_path,
+                    "garment_type": garment_type,
                     "elapsed_ms": round(elapsed_ms, 3),
                     "auto_quality_score": score,
                     "manual_review_required": needs_manual,
@@ -71,6 +74,7 @@ def run_tryon_batch(
                     "image": str(image),
                     "status": "error",
                     "error": str(exc),
+                    "garment_type": garment_type,
                     "elapsed_ms": round(elapsed_ms, 3),
                     "auto_quality_score": score,
                     "manual_review_required": needs_manual,

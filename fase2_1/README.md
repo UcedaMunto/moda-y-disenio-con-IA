@@ -40,7 +40,51 @@ python -m pytest -q tests/test_fase2_1_api.py
 # Evaluación batch (baseline)
 python fase2_1/scripts/evaluate_batch.py \
    --input-dir data/raw/personas \
-   --garment-path data/raw/models/TShirts.obj
+   --garment-path data/raw/models/TShirts.obj \
+   --garment-type shirt
+```
+
+---
+
+## Secuencia de trabajo del sistema (2.1)
+
+```mermaid
+sequenceDiagram
+    participant U as Usuario/UI
+    participant API as FastAPI Bridge
+    participant P as Pipeline TryOn
+    participant Q as Quality/Review
+    participant FS as Artifacts (JSON/JSONL)
+
+    U->>API: POST /fase2_1/tryon/run (image_path, garment_path, garment_type)
+    API->>P: run_tryon(request)
+    P->>P: detect_pose + segment_person
+    P->>P: compute_scale(landmarks, garment_type)
+    P-->>API: TryOnResult(status, output_path, scale, meta)
+    API-->>U: respuesta try-on
+
+    U->>API: POST /fase2_1/tryon/batch
+    API->>P: run_tryon_batch(..., garment_type)
+    P->>FS: report.json (summary/results)
+    P-->>API: TryOnBatchResult
+    API-->>U: resumen batch
+
+    U->>API: POST /fase2_1/tryon/evaluate
+    API->>Q: append_manual_review(criteria_scores)
+    Q->>FS: manual_reviews.jsonl
+    Q-->>API: score manual
+    API-->>U: evaluacion guardada
+
+    U->>API: GET /fase2_1/tryon/evaluate-summary
+    API->>Q: summarize_manual_reviews(project_id)
+    Q-->>API: resumen manual
+    API-->>U: metricas manuales
+
+    U->>API: GET /fase2_1/tryon/evaluate-consolidated
+    API->>Q: build_consolidated_evaluation_report()
+    Q->>FS: consolidated_report.json (opcional)
+    Q-->>API: resumen combinado batch+manual
+    API-->>U: metricas consolidadas
 ```
 
 ---

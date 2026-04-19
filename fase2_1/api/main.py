@@ -32,6 +32,7 @@ def tryon_batch(request: TryOnBatchRequest) -> dict:
         result = run_tryon_batch(
             input_dir=request.input_dir,
             garment_path=request.garment_path,
+            garment_type=request.garment_type,
             output_dir=request.output_dir,
             report_path=request.report_path,
             checklist_path=request.checklist_path,

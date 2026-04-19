@@ -395,6 +395,7 @@ def _run_fase21_tryon_batch(request: Fase21TryOnBatchRequest) -> dict:
     result = run_tryon_batch(
         input_dir=request.input_dir,
         garment_path=request.garment_path,
+        garment_type=request.garment_type,
         output_dir=request.output_dir,
         report_path=request.report_path,
         checklist_path=request.checklist_path,
@@ -577,6 +578,7 @@ def run_tryon_fase21_batch(request: Fase21TryOnBatchRequest) -> dict:
             payload={
                 "input_dir": request.input_dir,
                 "garment_path": request.garment_path,
+                "garment_type": request.garment_type,
                 "output_dir": request.output_dir,
                 "report_path": payload.get("report_path", request.report_path),
                 "total": summary.get("total", 0),
