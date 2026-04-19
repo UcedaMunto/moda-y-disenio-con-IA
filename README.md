@@ -414,6 +414,9 @@ Novedades implementadas y validadas:
   * `POST /projects/select`
 * Cache de conversion en `data/processed/pointcloud_meshes/`
 * En scripts Blender se intenta UV automatico (`smart_project`) cuando la malla no tiene UV
+* Auditoria reproducible de cobertura de IDs DeepFashion con script dedicado:
+  * `python -m scripts.analyze_deepfashion_coverage --old-root data_deepfasho_antiguo --new-root data_deepfashon --output data/processed/deepfashion/coverage_report.json`
+  * Resultado actual: `556` IDs compartidos, `42` IDs nuevos en dataset nuevo, cobertura de `100%` del antiguo dentro del nuevo
 
 Notas:
 
@@ -458,6 +461,7 @@ Implementado en esta iteracion:
   * `scripts/export_glb.py`
   * `scripts/train_lora.py`
   * `scripts/blender_apply_texture.py`
+  * `scripts/analyze_deepfashion_coverage.py`
 
 Nota: aun no se conecta diffusion+LoRA real. El generador actual es baseline deterministico para cerrar flujo de punta a punta.
 
