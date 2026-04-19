@@ -61,6 +61,12 @@ python fase2_1/scripts/prepare_segmentation_dataset.py \
    --seed 42 \
    --strict
 
+# Entrenar baseline de fit_regression (Semana 3)
+python fase2_1/scripts/train_fit_regression_baseline.py \
+   --dataset-jsonl data/processed/fase2_1_train/fit_regression/train.jsonl \
+   --output-model data/processed/fase2_1_train/fit_regression/model_baseline.json \
+   --l2 0.001
+
 # Benchmark de latencia (Semana 4)
 python fase2_1/scripts/benchmark_latency.py \
    --input-dir data/raw/personas \
