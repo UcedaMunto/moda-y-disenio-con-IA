@@ -110,6 +110,8 @@ Tareas:
 Progreso actual Semana 4:
 
 - [x] Migracion de startup API principal a `lifespan` (sin `on_event` deprecado).
+- [x] Script de benchmark de latencia por imagen (`fase2_1/scripts/benchmark_latency.py`).
+- [x] Documentacion de limites conocidos y flujo de fallback en README.
 
 Criterios de aceptacion:
 

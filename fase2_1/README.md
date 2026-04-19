@@ -42,6 +42,13 @@ python fase2_1/scripts/evaluate_batch.py \
    --input-dir data/raw/personas \
    --garment-path data/raw/models/TShirts.obj \
    --garment-type shirt
+
+# Benchmark de latencia (Semana 4)
+python fase2_1/scripts/benchmark_latency.py \
+   --input-dir data/raw/personas \
+   --garment-path data/raw/models/TShirts.obj \
+   --garment-type shirt \
+   --target-max-ms 2500
 ```
 
 ---
@@ -126,6 +133,26 @@ sequenceDiagram
    end
    LF-->>VS: app lista
    VS->>API: acepta requests
+```
+
+## Limites conocidos y reglas de fallback
+
+Limites actuales del MVP 2.1:
+
+- `segment_person` usa contrato `stub` (sin mascara real de modelo entrenado).
+- `run_tryon` mantiene salida placeholder (copia de imagen base) para validar contratos/API.
+- Fallback activo cuando DB no inicializa en startup: la API sigue operativa.
+
+```mermaid
+flowchart TD
+   A[Request /tryon/run] --> B{Pose detectada?}
+   B -- No --> E[Error controlado: No landmarks]
+   B -- Si --> C{Segmentacion disponible?}
+   C -- No --> F[Usar segmentation stub]
+   C -- Si --> G[Usar mascara real]
+   F --> H[Computar scale + contracts]
+   G --> H
+   H --> I[Output baseline placeholder]
 ```
 
 ---
