@@ -1,0 +1,51 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+.env
+.mypy_cache/
+.pytest_cache/
+.DS_Store
+
+# Editor/IDE
+.vscode/
+
+# Logs and local runtime state
+*.log
+mlruns/
+
+# Python build/distribution artifacts
+build/
+dist/
+*.egg-info/
+
+# Data outputs
+data/processed/
+data/exports/
+
+# Large raw datasets and assets
+data/raw/
+data_deepfasho_antiguo/
+data_deepfashon/
+
+# Generated media and heavy binaries
+*.obj
+*.fbx
+*.glb
+*.gltf
+*.ply
+*.stl
+*.onnx
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.h5
+*.npz
+*.npy
+*.bin
+
+# Model artifacts
+models/lora_fabrics/**/checkpoints/
+models/lora_fabrics/**/logs/

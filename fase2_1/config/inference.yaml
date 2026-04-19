@@ -1,0 +1,12 @@
+version: "2.1.0"
+mode: "baseline"
+pose:
+  backend: "mediapipe"
+  static_image_mode: true
+align:
+  scale_multiplier: 2.2
+overlay:
+  method: "alpha"
+  clamp_to_image: true
+outputs:
+  save_intermediate: false

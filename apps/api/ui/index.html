@@ -1,0 +1,1549 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Fabric2Mesh</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%23111518'/%3E%3Cpath d='M14 46V18h24v6H22v5h14v6H22v11z' fill='%233ecfcf'/%3E%3Ccircle cx='47' cy='41' r='8' fill='%238a9aab'/%3E%3C/svg%3E" />
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+  <style>
+    :root {
+      --bg: #111518;
+      --surface: #1a1f24;
+      --surface2: #222930;
+      --border: #2e3740;
+      --ink: #e8edf2;
+      --ink2: #8a9aab;
+      --accent: #3ecfcf;
+      --accent-dim: #1e7070;
+      --ok: #3ecf8e;
+      --bad: #f05d5d;
+      --warn: #f0a830;
+      --radius: 12px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--ink); font-family: system-ui, "Segoe UI", sans-serif; font-size: 14px; min-height: 100vh; }
+
+    /* ── Layout ── */
+    #app { display: grid; grid-template-rows: 52px 1fr; height: 100vh; overflow: hidden; }
+    #topbar {
+      display: flex; align-items: center; gap: 14px; padding: 0 20px;
+      background: var(--surface); border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    #topbar .logo { font-weight: 800; font-size: 1.1rem; letter-spacing: 0.06em; color: var(--accent); }
+    #topbar .logo span { color: var(--ink2); font-weight: 400; }
+    #topbar .spacer { flex: 1; }
+    #topbar .project-badge {
+      display: flex; align-items: center; gap: 6px;
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 8px; padding: 5px 10px; font-size: 0.82rem;
+    }
+    #topbar .project-badge label { color: var(--ink2); }
+    #topbar .project-badge input {
+      background: none; border: none; outline: none; color: var(--ink);
+      font: inherit; width: 130px;
+    }
+    #statusBar {
+      font-size: 0.78rem; color: var(--ink2); padding: 4px 10px;
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 8px; max-width: 320px; white-space: nowrap;
+      overflow: hidden; text-overflow: ellipsis;
+    }
+
+    #main { display: grid; grid-template-columns: 300px 1fr; overflow: hidden; }
+
+    /* ── Sidebar ── */
+    #sidebar {
+      background: var(--surface); border-right: 1px solid var(--border);
+      display: flex; flex-direction: column; overflow: hidden;
+    }
+    #sidebar-tabs { display: flex; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+    .stab {
+      flex: 1; padding: 10px 4px; text-align: center; font-size: 0.78rem;
+      font-weight: 600; letter-spacing: 0.04em; color: var(--ink2);
+      border: none; background: none; cursor: pointer; border-bottom: 2px solid transparent;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .stab.active { color: var(--accent); border-bottom-color: var(--accent); }
+    .stab-panel { display: none; flex: 1; overflow-y: auto; padding: 14px; flex-direction: column; gap: 12px; }
+    .stab-panel.active { display: flex; }
+
+    .field { display: flex; flex-direction: column; gap: 4px; }
+    .field label { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; color: var(--ink2); }
+    .field input, .field select, .field textarea {
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 8px; padding: 7px 10px; color: var(--ink); font: inherit;
+      outline: none; transition: border-color 0.15s;
+    }
+    .field input:focus, .field select:focus, .field textarea:focus { border-color: var(--accent); }
+    .field textarea { min-height: 60px; resize: vertical; }
+    .field select option { background: var(--surface2); }
+
+    .btn {
+      padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border);
+      background: var(--surface2); color: var(--ink); font: inherit; font-weight: 600;
+      cursor: pointer; transition: background 0.15s, border-color 0.15s, color 0.15s;
+      text-align: center;
+    }
+    .btn:hover { background: var(--border); border-color: var(--accent); color: var(--accent); }
+    .btn-accent { background: var(--accent); color: #0a1a1a; border-color: var(--accent); }
+    .btn-accent:hover { background: #52e0e0; border-color: #52e0e0; color: #0a1a1a; }
+    .btn-ok { border-color: var(--ok); color: var(--ok); }
+    .btn-ok:hover { background: rgba(62,207,142,0.1); }
+    .btn-bad { border-color: var(--bad); color: var(--bad); }
+    .btn-bad:hover { background: rgba(240,93,93,0.1); }
+    .btn-row { display: flex; gap: 6px; }
+    .btn-row .btn { flex: 1; }
+    .btn-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+
+    .section-title { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink2); padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+    .section-title-row { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+    .icon-btn {
+      width: 28px; height: 28px; border-radius: 8px; border: 1px solid var(--border);
+      background: var(--surface2); color: var(--ink2); cursor: pointer;
+    }
+    .icon-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+    /* Asset cards */
+    .asset-scroll { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .asset-card {
+      border: 1px solid var(--border); border-radius: 10px; background: var(--surface2);
+      overflow: hidden; cursor: pointer; transition: border-color 0.15s;
+    }
+    .asset-card:hover { border-color: var(--accent); }
+    .asset-card.selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
+    .asset-card img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; background: #0d1114; }
+    .model-thumb {
+      width: 100%; aspect-ratio: 1; display: grid; place-items: center;
+      background: #0d1114; color: var(--ink2); font-size: 0.68rem; text-align: center; padding: 8px;
+    }
+    .model-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .asset-card .ac-name { padding: 5px 7px 7px; font-size: 0.72rem; line-height: 1.3; word-break: break-all; color: var(--ink2); }
+
+    .asset-card .ac-badge { font-size: 0.65rem; background: var(--border); border-radius: 4px; padding: 1px 5px; color: var(--ink2); display: inline-block; margin-top: 2px; }
+
+    #uv-note {
+      font-size: 0.75rem; border-radius: 8px; padding: 7px 9px;
+      border: 1px solid var(--border); background: var(--surface2); color: var(--ink2);
+    }
+    
+    .pc-warning {
+      font-size: 0.75rem; border-radius: 6px; padding: 6px 8px; margin-top: 5px;
+      background: rgba(255, 193, 7, 0.1); border-left: 3px solid #ffc107;
+      color: var(--ink2); display: none;
+    }
+    .pc-warning.show { display: block; }
+    #uv-note.ok { border-color: var(--ok); color: var(--ok); background: rgba(62,207,142,0.06); }
+    #uv-note.warn { border-color: var(--warn); color: var(--warn); background: rgba(240,168,48,0.06); }
+    #uv-note.bad { border-color: var(--bad); color: var(--bad); background: rgba(240,93,93,0.06); }
+
+    /* ── Center: viewer + candidates ── */
+    #center { display: flex; flex-direction: column; overflow: hidden; }
+
+    #viewer-wrap {
+      flex: 1; position: relative; background: #0d1114;
+      border-bottom: 1px solid var(--border); overflow: hidden; min-height: 0;
+    }
+    #viewer3d { width: 100%; height: 100%; }
+    #viewer-overlay {
+      position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%);
+      display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: center;
+    }
+    .viewer-ctrl {
+      background: rgba(17,21,24,0.82); border: 1px solid var(--border);
+      border-radius: 10px; padding: 7px 12px; display: flex; align-items: center; gap: 8px;
+      backdrop-filter: blur(6px); font-size: 0.78rem; color: var(--ink2);
+    }
+    .viewer-ctrl label { white-space: nowrap; }
+    .viewer-ctrl input[type=range] {
+      width: 110px; accent-color: var(--accent);
+    }
+    .viewer-ctrl .val { font-weight: 700; color: var(--accent); min-width: 34px; }
+    #viewer-status {
+      position: absolute; top: 12px; left: 12px;
+      background: rgba(17,21,24,0.82); border: 1px solid var(--border);
+      border-radius: 8px; padding: 5px 10px; font-size: 0.74rem; color: var(--ink2);
+      backdrop-filter: blur(4px); max-width: 340px; pointer-events: none;
+    }
+
+    /* ── Candidates strip ── */
+    #cand-bar {
+      height: 190px; flex-shrink: 0; background: var(--surface);
+      border-top: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden;
+    }
+    #cand-header {
+      display: flex; align-items: center; gap: 10px; padding: 8px 14px 4px;
+      border-bottom: 1px solid var(--border); flex-shrink: 0;
+    }
+    #cand-header h3 { font-size: 0.82rem; font-weight: 700; color: var(--ink2); letter-spacing: 0.06em; text-transform: uppercase; }
+    #cand-header .spacer { flex: 1; }
+    #cand-strip { display: flex; gap: 8px; padding: 8px 14px; overflow-x: auto; flex: 1; }
+    #cand-strip::-webkit-scrollbar { height: 4px; }
+    #cand-strip::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+    .cand-card {
+      flex-shrink: 0; width: 120px; border: 2px solid var(--border);
+      border-radius: 10px; overflow: hidden; cursor: pointer; background: var(--surface2);
+      transition: border-color 0.15s; position: relative;
+    }
+    .cand-card:hover { border-color: var(--accent); }
+    .cand-card.selected { border-color: var(--accent); }
+    .cand-card img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; }
+    .cand-card .cand-actions {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 3px; padding: 4px;
+    }
+    .cand-card .cand-actions button { padding: 3px; font-size: 0.68rem; border-radius: 5px; }
+    .cand-empty { display: flex; align-items: center; justify-content: center; width: 100%; color: var(--ink2); font-size: 0.82rem; opacity: 0.7; }
+
+    /* ── Console drawer ── */
+    #console-drawer {
+      position: fixed; bottom: 0; right: 0; width: 420px;
+      background: #0a0e10; border: 1px solid var(--border); border-bottom: none;
+      border-radius: 12px 12px 0 0; z-index: 100; transform: translateY(calc(100% - 34px));
+      transition: transform 0.2s ease;
+    }
+    #console-drawer.open { transform: translateY(0); }
+    #console-toggle {
+      width: 100%; padding: 7px 14px; background: var(--surface2); border: none;
+      border-radius: 12px 12px 0 0; color: var(--ink2); font: inherit; font-size: 0.76rem;
+      font-weight: 700; cursor: pointer; text-align: left; letter-spacing: 0.05em;
+      border-bottom: 1px solid var(--border);
+    }
+    #console-toggle:hover { color: var(--accent); }
+    pre#console {
+      background: transparent; color: #7ed8a0; font-size: 0.72rem; padding: 10px 14px;
+      max-height: 240px; overflow-y: auto; font-family: "Cascadia Code", "Fira Code", monospace;
+    }
+    pre#console::-webkit-scrollbar { width: 4px; }
+    pre#console::-webkit-scrollbar-thumb { background: #2a2a2a; }
+
+    /* responsive */
+    @media (max-width: 780px) {
+      #main { grid-template-columns: 1fr; }
+      #sidebar { border-right: none; border-bottom: 1px solid var(--border); height: auto; max-height: 50vh; }
+      #console-drawer { width: 100%; }
+    }
+
+    /* range styling */
+    input[type=range] { cursor: pointer; }
+
+    /* Modal */
+    .modal-backdrop {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.55); display: none;
+      align-items: center; justify-content: center; z-index: 200;
+    }
+    .modal-backdrop.open { display: flex; }
+    .modal-card {
+      width: min(92vw, 460px); background: var(--surface); border: 1px solid var(--border);
+      border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 10px;
+    }
+    .modal-title { font-size: 0.9rem; font-weight: 700; color: var(--ink); }
+    .modal-preview {
+      width: 100%; aspect-ratio: 1.5; border: 1px dashed var(--border); border-radius: 8px;
+      display: grid; place-items: center; color: var(--ink2); overflow: hidden; background: #0d1114;
+    }
+    .modal-preview img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <!-- Topbar -->
+    <header id="topbar">
+      <div class="logo">Fabric<span>2</span>Mesh</div>
+      <div class="project-badge">
+        <label>Proyecto:</label>
+        <input id="projectId" value="case-gris" />
+      </div>
+      <div class="spacer"></div>
+      <div id="statusBar">Iniciando…</div>
+      <button class="btn" id="btnRefresh" style="width:auto;padding:6px 14px;">⟳ Actualizar</button>
+      <button class="btn btn-accent" id="btnRunFullCase" style="width:auto;padding:6px 16px;">▶ Ejecutar Todo</button>
+    </header>
+
+    <div id="main">
+      <!-- Sidebar -->
+      <aside id="sidebar">
+        <div id="sidebar-tabs">
+          <button class="stab active" data-tab="tab-assets">Telas &amp; Modelos</button>
+          <button class="stab" data-tab="tab-settings">Ajustes</button>
+        </div>
+
+        <!-- Tab: Assets -->
+        <div class="stab-panel active" id="tab-assets">
+          <div class="section-title section-title-row">
+            <span>Telas</span>
+            <button class="icon-btn" id="btnOpenFabricUpload" title="Subir tela">📷</button>
+          </div>
+          <div class="asset-scroll" id="fabricGallery"></div>
+
+          <div class="section-title" style="margin-top:4px;">Modelos 3D</div>
+          <div class="field">
+            <label>Buscar por nombre (autocompletado)</label>
+            <input id="modelSearch" list="modelSearchList" placeholder="Ej: tshirt, 132-1-2, raglan..." />
+            <datalist id="modelSearchList"></datalist>
+          </div>
+          <div id="model-limit-note" style="font-size:0.72rem;color:var(--ink2);">Mostrando los primeros 6 resultados del buscador.</div>
+          <div class="asset-scroll" id="modelGallery"></div>
+          <div id="uv-note">UV: pendiente</div>
+          <div id="pc-warning" class="pc-warning"></div>
+          <button class="btn" id="btnImportDownloads">⬇ Importar Descargas</button>
+        </div>
+
+        <!-- Tab: Settings -->
+        <div class="stab-panel" id="tab-settings">
+          <div class="section-title">Generar Candidatos</div>
+          <div class="field">
+            <label>Tela (ruta)</label>
+            <textarea id="imagePaths">data/raw/telas/gris.webp</textarea>
+          </div>
+          <div class="field">
+            <label>Modelo 3D (ruta)</label>
+            <input id="modelPath" value="data/raw/models/TShirts.obj" />
+          </div>
+          <div class="field">
+            <label>N Candidatos</label>
+            <input id="nCandidates" type="number" min="1" max="32" value="6" />
+          </div>
+          <button class="btn btn-accent" id="btnGenerate">✦ Generar Candidatos</button>
+
+          <div class="section-title" style="margin-top:4px;">Exportar</div>
+          <div class="field">
+            <label>Ruta de exportación</label>
+            <input id="outputPath" value="data/exports/case-gris-from-ui.glb" />
+          </div>
+          <div class="btn-grid">
+            <button class="btn" id="btnPreviewSheet">Sheet 2D</button>
+            <button class="btn" id="btnPreview3d">Preview 3D</button>
+            <button class="btn btn-ok" id="btnExport">Exportar</button>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Center -->
+      <div id="center">
+        <!-- 3D Viewer -->
+        <div id="viewer-wrap">
+          <div id="viewer3d"></div>
+          <div id="viewer-status">Selecciona una tela y una textura para ver el preview 3D.</div>
+          <!-- Controls overlay -->
+          <div id="viewer-overlay">
+            <div class="viewer-ctrl">
+              <label>Ángulo tela</label>
+              <input type="range" id="fabricAngle" min="0" max="360" value="0" step="1" />
+              <span class="val" id="fabricAngleVal">0°</span>
+            </div>
+            <div class="viewer-ctrl">
+              <label>Escala tela</label>
+              <input type="range" id="fabricScale" min="1" max="20" value="4" step="0.5" />
+              <span class="val" id="fabricScaleVal">×4</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Candidates strip -->
+        <div id="cand-bar">
+          <div id="cand-header">
+            <h3>Candidatos</h3>
+            <div class="spacer"></div>
+            <button class="btn" id="btnGenerate2" style="width:auto;padding:4px 12px;font-size:0.76rem;">✦ Generar</button>
+          </div>
+          <div id="cand-strip">
+            <div class="cand-empty">Genera candidatos para ver las variantes de textura.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Console drawer -->
+  <div id="console-drawer">
+    <button id="console-toggle">▲ Consola de depuración</button>
+    <pre id="console"></pre>
+  </div>
+
+  <div class="modal-backdrop" id="fabricModal">
+    <div class="modal-card">
+      <div class="modal-title">Subir nueva tela</div>
+      <div class="field">
+        <label>Nombre</label>
+        <input id="fabricUploadName" placeholder="ej: tela-rayas-azul" />
+      </div>
+      <div class="field">
+        <label>Archivo de imagen</label>
+        <input id="fabricUploadFile" type="file" accept="image/png,image/jpeg,image/webp" />
+      </div>
+      <div class="modal-preview" id="fabricUploadPreview">Preview</div>
+      <div class="btn-row">
+        <button class="btn" id="btnCloseFabricModal">Cancelar</button>
+        <button class="btn btn-accent" id="btnUploadFabric">Guardar tela</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    const state = {
+      maxModelCards: 6,
+      candidates: [],
+      selected: null,
+      sheetPath: null,
+      preview3dPath: null,
+      exportPath: null,
+      selectedCandidatePath: null,
+      assetImages: [],
+      assetModels: [],
+      targetModels: [],
+      modelQuery: "",
+      modelSearchTimer: null,
+      modelMetaByPath: {},
+      threeReady: false,
+      three: null,
+      scene: null,
+      camera: null,
+      renderer: null,
+      controls: null,
+      currentObject: null,
+      lastRenderKey: null,
+      modelThumbRunId: 0,
+      animHandle: null,
+      modelReport: null,
+      fabricAngleDeg: 0,
+      fabricScale: 4,
+    };
+
+    const byId = (id) => document.getElementById(id);
+    const logBox = byId("console");
+
+    function installConsoleWarnFilter() {
+      if (window.__f2mWarnFilterInstalled) return;
+      const originalWarn = console.warn.bind(console);
+      console.warn = (...args) => {
+        // Check every arg individually + the joined message
+        const joined = args.map((a) => String(a)).join(" ").toLowerCase();
+        const isFbxLegacy = joined.includes("map is not supported in three.js, skipping texture");
+        if (isFbxLegacy) return;   // silently drop
+        originalWarn(...args);
+      };
+      window.__f2mWarnFilterInstalled = true;
+      log("3D", "Filtro global de warnings FBX legacy activado.");
+    }
+
+    function setStatus(msg) {
+      const el = byId("statusBar");
+      if (el) el.textContent = msg;
+    }
+
+    function renderUvNote() {
+      const note = byId("uv-note");
+      const pcWarning = byId("pc-warning");
+      
+      // Check if current model is a point cloud
+      const modelPath = byId("modelPath").value.trim();
+      const modelMeta = getModelMeta(modelPath);
+      const isPointCloud = Boolean(modelMeta?.is_point_cloud) || isPointCloudPath(modelPath);
+      
+      if (!note) return;
+      note.className = "";
+      
+      // Show point cloud warning if applicable
+      if (pcWarning) {
+        if (isPointCloud) {
+          pcWarning.classList.add("show");
+          pcWarning.innerHTML = `<strong>⚠️ Point Cloud:</strong> No se pueden aplicar texturas. Las nubes de puntos requieren UV mapping (disponible solo en mallas). Se visualizará con color base.`;
+        } else {
+          pcWarning.classList.remove("show");
+        }
+      }
+      
+      if (!state.modelReport) { note.textContent = "UV: pendiente"; return; }
+      const uv = (state.modelReport.uv_status || "unknown").toLowerCase();
+      const msg = state.modelReport.uv_message || "sin detalle";
+      note.className = uv === "ok" ? "ok" : uv === "missing" ? "bad" : "warn";
+      note.textContent = `UV: ${uv}. ${msg}`;
+    }
+
+    // Keep legacy compat alias
+    function renderModelContractNote() { renderUvNote(); }
+
+    function log(message, data) {
+      const line = typeof data === "undefined" ? message : `${message}\n${JSON.stringify(data, null, 2)}`;
+      logBox.textContent = `${new Date().toLocaleTimeString()} ${line}\n\n` + logBox.textContent;
+    }
+
+    function projectId() { return byId("projectId").value.trim(); }
+
+    function toArtifactUrl(path) {
+      if (!path) return "";
+      if (path.startsWith("data:")) return path;  // inline base64
+      if (path.startsWith("/")) {
+        // Already an absolute path — encode each segment but not slashes
+        return path.split("/").map((seg, i) => i === 0 ? seg : encodeURIComponent(seg)).join("/");
+      }
+      if (path.startsWith("data_deepfashon/")) {
+        return "/deepfashion-artifacts/" + path.slice("data_deepfashon/".length).split("/").map(encodeURIComponent).join("/");
+      }
+      const relative = path.startsWith("data/") ? path.slice(5) : path;
+      return "/artifacts/" + relative.split("/").map(encodeURIComponent).join("/");
+    }
+
+    function fileName(path) { return (path || "").split("/").pop() || path; }
+    function modelExt(path) {
+      const p = String(path || "").toLowerCase();
+      const i = p.lastIndexOf(".");
+      return i >= 0 ? p.slice(i) : "";
+    }
+    function isPointCloudPath(path) {
+      const p = String(path || "").toLowerCase();
+      return p.includes("/point_cloud/") || p.endsWith(".ply");
+    }
+    function getModelMeta(path) {
+      if (!path) return null;
+      return state.modelMetaByPath[path] || null;
+    }
+    function replaceExtension(path, ext) {
+      return (path || "").replace(/\.[^.\/]+$/i, ext);
+    }
+    function resolvePreviewModelPath(modelPath) {
+      if (!modelPath) return modelPath;
+      const lower = modelPath.toLowerCase();
+      if (!lower.endsWith(".fbx")) return modelPath;
+
+      const siblingObj = replaceExtension(modelPath, ".obj");
+      const siblingGlb = replaceExtension(modelPath, ".glb");
+      const siblingGltf = replaceExtension(modelPath, ".gltf");
+      const sourceModels = [...(state.targetModels || []), ...(state.assetModels || [])];
+      const available = new Map(sourceModels.map((item) => [String(item.path || "").toLowerCase(), item.path]));
+
+      return available.get(siblingObj.toLowerCase())
+        || available.get(siblingGlb.toLowerCase())
+        || available.get(siblingGltf.toLowerCase())
+        || modelPath;
+    }
+    function modelFormat(modelItem) { return (modelItem && modelItem.format ? modelItem.format : "other").toLowerCase(); }
+    function garmentType(modelItem) { return (modelItem && modelItem.garment_type ? modelItem.garment_type : "other").toLowerCase(); }
+
+    async function api(path, method = "GET", body = null) {
+      const t0 = performance.now();
+      log("API request", { method, path, hasBody: Boolean(body) });
+      const options = { method, headers: { "Content-Type": "application/json" } };
+      if (body) options.body = JSON.stringify(body);
+      const response = await fetch(path, options);
+      const t1 = performance.now();
+      log("API response", {
+        method,
+        path,
+        status: response.status,
+        ok: response.ok,
+        ms: Math.round(t1 - t0),
+        contentType: response.headers.get("content-type") || "n/a",
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || "Request failed");
+      return data;
+    }
+
+    async function ensureThreeReady() {
+      if (state.threeReady) { log("3D", "Three.js ya cargado, reutilizando."); return; }
+      installConsoleWarnFilter();
+      log("3D [1/5]", "Importando three core...");
+      const THREE = await import("three").catch(e => { throw new Error("Fallo importar three: " + e.message); });
+      log("3D [2/5]", "three OK — importando OrbitControls...");
+      const { OrbitControls } = await import("three/addons/controls/OrbitControls.js").catch(e => { throw new Error("Fallo OrbitControls: " + e.message); });
+      log("3D [3/5]", "OrbitControls OK — importando OBJLoader...");
+      const { OBJLoader } = await import("three/addons/loaders/OBJLoader.js").catch(e => { throw new Error("Fallo OBJLoader: " + e.message); });
+      log("3D [4/5]", "OBJLoader OK — importando FBXLoader...");
+      const { FBXLoader } = await import("three/addons/loaders/FBXLoader.js").catch(e => { throw new Error("Fallo FBXLoader: " + e.message); });
+      log("3D [5/5]", "FBXLoader OK — importando GLTFLoader...");
+      const { GLTFLoader } = await import("three/addons/loaders/GLTFLoader.js").catch(e => { throw new Error("Fallo GLTFLoader: " + e.message); });
+      const { TGALoader } = await import("three/addons/loaders/TGALoader.js").catch(e => { throw new Error("Fallo TGALoader: " + e.message); });
+      const { PLYLoader } = await import("three/addons/loaders/PLYLoader.js").catch(e => { throw new Error("Fallo PLYLoader: " + e.message); });
+      state.three = { THREE, OrbitControls, OBJLoader, FBXLoader, GLTFLoader, TGALoader, PLYLoader };
+      state.threeReady = true;
+      log("3D", "Todos los módulos Three.js cargados correctamente.");
+    }
+
+    function setupViewer() {
+      log("3D setupViewer", "Buscando elemento #viewer-wrap...");
+      const host = byId("viewer-wrap");
+      if (!host) { log("3D setupViewer ERROR", "Elemento #viewer-wrap NO encontrado en el DOM"); return; }
+      log("3D setupViewer", `host encontrado: ${host.tagName} ${host.clientWidth}x${host.clientHeight}px`);
+      if (state.renderer) {
+        const canvas = state.renderer.domElement;
+        if (!host.contains(canvas)) {
+          log("3D setupViewer", "Canvas huérfano detectado — re-adjuntando al DOM...");
+          byId("viewer3d").appendChild(canvas);
+          log("3D setupViewer", "Canvas re-adjuntado OK.");
+        } else {
+          log("3D setupViewer", "Renderer ya existe y canvas está en el DOM. Reutilizando.");
+        }
+        return;
+      }
+
+      const { THREE, OrbitControls } = state.three;
+      if (!THREE) { log("3D setupViewer ERROR", "THREE no está disponible en state.three"); return; }
+
+      try {
+        log("3D setupViewer", "Creando Scene y Camera...");
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x0d1114);
+        const w = host.clientWidth || 800;
+        const h = host.clientHeight || 500;
+        const camera = new THREE.PerspectiveCamera(50, w / h, 0.1, 1000);
+        camera.position.set(0.0, 1.2, 2.8);
+
+        log("3D setupViewer", "Creando WebGLRenderer...");
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, preserveDrawingBuffer: true });
+        renderer.setPixelRatio(window.devicePixelRatio || 1);
+        renderer.setSize(w, h);
+        renderer.outputColorSpace = THREE.SRGBColorSpace;
+        const mountTarget = byId("viewer3d");
+        mountTarget.innerHTML = "";
+        renderer.domElement.style.cssText = "position:absolute;top:0;left:0;width:100%;height:100%;";
+        mountTarget.style.position = "relative";
+        mountTarget.appendChild(renderer.domElement);
+        log("3D setupViewer", `WebGLRenderer OK — canvas ${renderer.domElement.width}x${renderer.domElement.height}`);
+
+        log("3D setupViewer", "Añadiendo luces...");
+        const hemi = new THREE.HemisphereLight(0xffffff, 0x102030, 1.0);
+        scene.add(hemi);
+        const key = new THREE.DirectionalLight(0xffffff, 1.4);
+        key.position.set(2.0, 3.0, 2.0);
+        scene.add(key);
+        const fill = new THREE.DirectionalLight(0xaaccff, 0.5);
+        fill.position.set(-2.0, 1.5, -2.0);
+        scene.add(fill);
+        scene.add(new THREE.GridHelper(6, 12, 0x1e3040, 0x162030));
+
+        log("3D setupViewer", "Creando OrbitControls...");
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.06;
+
+        state.scene = scene;
+        state.camera = camera;
+        state.renderer = renderer;
+        state.controls = controls;
+
+        const loop = () => {
+          state.animHandle = requestAnimationFrame(loop);
+          controls.update();
+          renderer.render(scene, camera);
+        };
+        loop();
+        log("3D setupViewer", "Loop de animación iniciado. Viewer listo.");
+
+        window.addEventListener("resize", () => {
+          const width = host.clientWidth;
+          const height = host.clientHeight || 500;
+          camera.aspect = width / height;
+          camera.updateProjectionMatrix();
+          renderer.setSize(width, height);
+        });
+      } catch (e) {
+        log("3D setupViewer ERROR", { message: e.message, stack: e.stack });
+        throw new Error("setupViewer falló: " + e.message);
+      }
+    }
+
+    function disposeCurrentObject() {
+      if (!state.currentObject || !state.scene) return;
+      state.scene.remove(state.currentObject);
+      state.currentObject.traverse((child) => {
+        if (!child.isMesh) return;
+        if (child.geometry) child.geometry.dispose();
+        if (child.material) {
+          if (Array.isArray(child.material)) child.material.forEach((m) => m && m.dispose && m.dispose());
+          else if (child.material.dispose) child.material.dispose();
+        }
+      });
+      state.currentObject = null;
+    }
+
+    async function loadModelObject(modelPath, options = {}) {
+      const silent = Boolean(options.silent);
+      const debug = Boolean(options.debug);
+      const debugLabel = options.debugLabel || "";
+      const { THREE, OBJLoader, FBXLoader, GLTFLoader, TGALoader, PLYLoader } = state.three;
+      const requestedPath = modelPath;
+      modelPath = resolvePreviewModelPath(modelPath);
+      const url = toArtifactUrl(modelPath);
+      const lower = (modelPath || "").toLowerCase();
+      const traceEnabled = !silent || debug;
+      const tModelStart = performance.now();
+      if (traceEnabled) log("3D model trace start", { debugLabel, requestedPath, resolvedPath: modelPath, url });
+      if (!silent) log("3D cargando modelo", `URL: ${url}`);
+      if (!silent && requestedPath !== modelPath) {
+        log("3D preview fallback", `Se usa ${fileName(modelPath)} para preview en lugar de ${fileName(requestedPath)} porque evita dependencias FBX externas.`);
+      }
+
+      // Verificar que el archivo existe antes de intentar cargar
+      try {
+        const tHead0 = performance.now();
+        const probe = await fetch(url, { method: "HEAD" });
+        const tHead1 = performance.now();
+        if (traceEnabled) {
+          log("3D model HEAD", {
+            debugLabel,
+            status: probe.status,
+            ok: probe.ok,
+            ms: Math.round(tHead1 - tHead0),
+            contentType: probe.headers.get("content-type") || "n/a",
+            size: probe.headers.get("content-length") || "n/a",
+          });
+        }
+        if (!probe.ok) throw new Error(`Modelo no encontrado en servidor: ${probe.status} ${url}`);
+      } catch (e) {
+        throw new Error(`No se pudo acceder al modelo (${url}): ${e.message}`);
+      }
+
+      if (lower.endsWith(".obj")) {
+        if (!silent) log("3D", "Usando OBJLoader...");
+        let obj;
+        const tLoad0 = performance.now();
+        try { obj = await new OBJLoader().loadAsync(url); }
+        catch (e) { throw new Error(`OBJLoader.loadAsync falló (${url}): ${e.message}`); }
+        const tLoad1 = performance.now();
+        let meshCount = 0, vertCount = 0;
+        obj.traverse(c => { if (c.isMesh) { meshCount++; vertCount += c.geometry?.attributes?.position?.count || 0; } });
+        if (!silent) log("3D OBJ cargado", `meshes=${meshCount} vértices≈${vertCount}`);
+        if (traceEnabled) log("3D model OBJ trace", { debugLabel, meshes: meshCount, vertices: vertCount, ms: Math.round(tLoad1 - tLoad0), totalMs: Math.round(performance.now() - tModelStart) });
+        if (!silent && meshCount === 0) log("3D OBJ ADVERTENCIA", "El OBJ no contiene ninguna malla visible");
+        return obj;
+      }
+      if (lower.endsWith(".fbx")) {
+        if (!silent) log("3D", "Usando FBXLoader...");
+        let fbx;
+        const manager = new THREE.LoadingManager();
+        const onePixelPng = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAukB9WnVb9sAAAAASUVORK5CYII=";
+        let warnedMissingTga = false;
+        manager.setURLModifier((assetUrl) => {
+          const normalized = String(assetUrl || "").replaceAll("\\", "/");
+          if (/\.tga(\?.*)?$/i.test(normalized)) {
+            if (!warnedMissingTga && !silent) {
+              warnedMissingTga = true;
+              log("3D FBX aviso", "El FBX referencia texturas .tga externas no disponibles; se usa placeholder para evitar errores 404.");
+            }
+            return onePixelPng;
+          }
+          return assetUrl;
+        });
+        manager.addHandler(/\.tga$/i, new TGALoader());
+        const fbxLoader = new FBXLoader(manager);
+        if (!silent) {
+          log("3D FBX aviso", "Si el archivo contiene mapas legacy (AmbientColor/SpecularFactor/ShininessExponent), se ignoran sin romper el render.");
+        }
+        const tLoad0 = performance.now();
+        try { fbx = await fbxLoader.loadAsync(url); }
+        catch (e) { throw new Error(`FBXLoader.loadAsync falló (${url}): ${e.message}`); }
+        const tLoad1 = performance.now();
+        let meshCount = 0, vertCount = 0;
+        fbx.traverse(c => { if (c.isMesh) { meshCount++; vertCount += c.geometry?.attributes?.position?.count || 0; } });
+        if (!silent) log("3D FBX cargado", `meshes=${meshCount} vértices≈${vertCount}`);
+        if (traceEnabled) log("3D model FBX trace", { debugLabel, meshes: meshCount, vertices: vertCount, ms: Math.round(tLoad1 - tLoad0), totalMs: Math.round(performance.now() - tModelStart) });
+        if (!silent && meshCount === 0) log("3D FBX ADVERTENCIA", "El FBX no contiene ninguna malla visible");
+        return fbx;
+      }
+      if (lower.endsWith(".glb") || lower.endsWith(".gltf")) {
+        if (!silent) log("3D", "Usando GLTFLoader...");
+        let gltf;
+        const tLoad0 = performance.now();
+        try { gltf = await new GLTFLoader().loadAsync(url); }
+        catch (e) { throw new Error(`GLTFLoader.loadAsync falló (${url}): ${e.message}`); }
+        const tLoad1 = performance.now();
+        let meshCount = 0;
+        gltf.scene.traverse(c => { if (c.isMesh) meshCount++; });
+        if (!silent) log("3D GLTF cargado", `meshes=${meshCount}`);
+        if (traceEnabled) log("3D model GLTF trace", { debugLabel, meshes: meshCount, ms: Math.round(tLoad1 - tLoad0), totalMs: Math.round(performance.now() - tModelStart) });
+        return gltf.scene;
+      }
+      if (lower.endsWith(".ply")) {
+        if (!silent) log("3D", "Usando PLYLoader...");
+        let geometry;
+        const tLoad0 = performance.now();
+        try { geometry = await new PLYLoader().loadAsync(url); }
+        catch (e) { throw new Error(`PLYLoader.loadAsync falló (${url}): ${e.message}`); }
+        const tLoad1 = performance.now();
+        const isPointCloud = isPointCloudPath(modelPath);
+        let object;
+        if (isPointCloud) {
+          // Point clouds: aumentar tamaño significativamente para visibilidad
+          // size: 0.01 era demasiado pequeño y causaba que se vieran como "agujeros"
+          object = new THREE.Points(
+            geometry,
+            new THREE.PointsMaterial({
+              color: 0x64b5f6,  // Azul claro mejorado
+              size: 0.05,       // 5x más grande que antes (0.01 -> 0.05)
+              sizeAttenuation: true,
+              transparent: false,
+              alphaTest: 0.0
+            })
+          );
+        } else {
+          geometry.computeVertexNormals();
+          object = new THREE.Mesh(
+            geometry,
+            new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.8, metalness: 0.0, side: THREE.DoubleSide })
+          );
+        }
+        if (traceEnabled) {
+          log("3D model PLY trace", {
+            debugLabel,
+            pointCloud: isPointCloud,
+            vertices: geometry.attributes?.position?.count || 0,
+            ms: Math.round(tLoad1 - tLoad0),
+            totalMs: Math.round(performance.now() - tModelStart),
+          });
+        }
+        return object;
+      }
+      throw new Error(`Formato no soportado para preview interactivo: ${modelPath}`);
+    }
+
+    function frameObject(object) {
+      try {
+        const { THREE } = state.three;
+        const box = new THREE.Box3().setFromObject(object);
+        const size = box.getSize(new THREE.Vector3());
+        const center = box.getCenter(new THREE.Vector3());
+        log("3D frameObject", `Bounding box size=(${size.x.toFixed(2)}, ${size.y.toFixed(2)}, ${size.z.toFixed(2)}) center=(${center.x.toFixed(2)}, ${center.y.toFixed(2)}, ${center.z.toFixed(2)})`);
+        const maxDim = Math.max(size.x, size.y, size.z) || 1;
+        const desiredSize = 1.8;
+        const scale = desiredSize / maxDim;
+        log("3D frameObject", `scale=${scale.toFixed(4)} maxDim=${maxDim.toFixed(2)}`);
+
+        // Normalize object around origin to make camera framing predictable.
+        object.position.sub(center);
+        object.scale.setScalar(scale);
+
+        const scaledBox = new THREE.Box3().setFromObject(object);
+        const scaledSize = scaledBox.getSize(new THREE.Vector3());
+        const scaledCenter = scaledBox.getCenter(new THREE.Vector3());
+        const radius = Math.max(scaledSize.x, scaledSize.y, scaledSize.z) * 0.6;
+
+        const fov = state.camera.fov * (Math.PI / 180);
+        const dist = Math.max(radius / Math.sin(fov / 2), 2.2);
+        state.camera.near = 0.01;
+        state.camera.far = Math.max(100, dist * 20);
+        state.camera.updateProjectionMatrix();
+
+        state.camera.position.set(scaledCenter.x + dist * 0.55, scaledCenter.y + dist * 0.25, scaledCenter.z + dist);
+        state.controls.target.copy(scaledCenter);
+        state.controls.update();
+        log("3D frameObject", `Cámara y controles actualizados. dist=${dist.toFixed(2)} near=${state.camera.near} far=${state.camera.far.toFixed(2)}`);
+      } catch (e) {
+        log("3D frameObject ERROR", { message: e.message, stack: e.stack });
+        throw new Error("frameObject falló: " + e.message);
+      }
+    }
+
+    async function applyTextureToObject(object, texturePath) {
+      const { THREE } = state.three;
+      const texUrl = toArtifactUrl(texturePath);
+      log("3D textura URL", texUrl);
+      const texture = await new Promise((resolve, reject) => {
+        new THREE.TextureLoader().load(texUrl, resolve, undefined, (e) => reject(new Error(`No se pudo cargar textura (${texUrl}): ${e?.message || e}`)));
+      });
+      log("3D textura cargada", `${texUrl} (${texture.image?.width}x${texture.image?.height}px)`);
+      try {
+        texture.wrapS = THREE.RepeatWrapping;
+        texture.wrapT = THREE.RepeatWrapping;
+        texture.colorSpace = THREE.SRGBColorSpace;
+        texture.center.set(0.5, 0.5);
+        texture.rotation = state.fabricAngleDeg * (Math.PI / 180);
+        texture.repeat.set(state.fabricScale, state.fabricScale);
+
+        let meshesTexturizados = 0;
+        object.traverse((child) => {
+          if (!child.isMesh) return;
+          child.material = new THREE.MeshStandardMaterial({
+            map: texture,
+            color: 0xffffff,
+            roughness: 0.9,
+            metalness: 0.0,
+            side: THREE.DoubleSide,
+          });
+          if (child.isSkinnedMesh) child.material.skinning = true;
+          child.material.needsUpdate = true;
+          meshesTexturizados++;
+        });
+        log("3D textura aplicada", `${meshesTexturizados} meshes texturizados`);
+        if (meshesTexturizados === 0) log("3D textura ADVERTENCIA", "Ningún mesh recibió la textura — el objeto puede no tener geometría visible");
+      } catch (e) {
+        log("3D applyTexture ERROR", { message: e.message, stack: e.stack });
+        throw new Error("applyTextureToObject falló al aplicar material: " + e.message);
+      }
+    }
+
+    /** Update texture rotation/scale on the live object without reloading */
+    function updateFabricTransform() {
+      if (!state.currentObject || !state.three) return;
+      state.currentObject.traverse((child) => {
+        if (!child.isMesh) return;
+        const mat = child.material;
+        if (!mat || !mat.map) return;
+        mat.map.center.set(0.5, 0.5);
+        mat.map.rotation = state.fabricAngleDeg * (Math.PI / 180);
+        mat.map.repeat.set(state.fabricScale, state.fabricScale);
+        mat.map.needsUpdate = true;
+      });
+    }
+
+    async function renderInteractivePreview() {
+      const modelPath = byId("modelPath").value.trim();
+      const texturePath = state.selected || state.selectedCandidatePath;
+      const modelMeta = getModelMeta(modelPath);
+      const isPointCloudModel = Boolean(modelMeta?.is_point_cloud) || isPointCloudPath(modelPath);
+      log("3D renderInteractivePreview", { modelPath: modelPath || "(vacío)", texturePath: texturePath || "(ninguna seleccionada)" });
+
+      if (!modelPath || (!texturePath && !isPointCloudModel)) {
+        const missing = [];
+        if (!modelPath) missing.push("modelo 3D");
+        if (!texturePath && !isPointCloudModel) missing.push("textura/candidato");
+        const msg = `Selecciona ${missing.join(" y ")} para activar el preview 3D.`;
+        byId("viewer-status").textContent = msg;
+        log("3D skip", msg);
+        return;
+      }
+
+      byId("viewer-status").textContent = "Cargando visor 3D…";
+      try {
+        const renderKey = `${modelPath}::${texturePath}`;
+        if (state.currentObject && state.lastRenderKey === renderKey) {
+          log("3D cache", "Modelo+textura no cambiaron; se mantiene el render actual.");
+          byId("viewer-status").textContent = `${fileName(modelPath)} · ${fileName(texturePath)}`;
+          return;
+        }
+
+        log("3D paso 1", "Cargando módulos Three.js…");
+        await ensureThreeReady();
+
+        log("3D paso 2", "Inicializando renderer WebGL…");
+        setupViewer();
+        disposeCurrentObject();
+
+        const previewModelPath = resolvePreviewModelPath(modelPath);
+        log("3D paso 3", `Descargando modelo: ${previewModelPath}`);
+        const object = await loadModelObject(modelPath);
+
+        if (isPointCloudModel) {
+          log("3D paso 4", "✦ Detectado: Point Cloud (nube de puntos). NO se puede aplicar texturas.");
+          log("3D info", "Las texturas requieren UV mapping (disponible solo en mallas). Los point clouds se visualizan con color base.");
+        } else {
+          log("3D paso 4", `Aplicando textura: ${texturePath}`);
+          await applyTextureToObject(object, texturePath);
+        }
+
+        log("3D paso 5", "Encuadrando objeto en escena…");
+        frameObject(object);
+
+        state.scene.add(object);
+        state.currentObject = object;
+        state.lastRenderKey = renderKey;
+        const msg = isPointCloudModel
+          ? `${fileName(modelPath)} · POINT CLOUD · Sin textura`
+          : `${fileName(modelPath)} · ${fileName(texturePath)}`;
+        byId("viewer-status").textContent = msg;
+        setStatus(`Preview 3D: ${msg}`);
+        log("3D listo", msg);
+      } catch (err) {
+        const msg = `Error 3D: ${err.message}`;
+        byId("viewer-status").textContent = msg;
+        setStatus(msg);
+        log("3D Viewer Error", { message: err.message, stack: err.stack });
+      }
+    }
+
+    function renderStats(metrics, summary) {
+      // Stats removed from UI — log to console only
+      log("Metrics", { ...metrics, feedback_total: summary.total });
+    }
+
+    function renderGallery() {
+      const strip = byId("cand-strip");
+      if (!state.candidates.length) {
+        strip.innerHTML = `<div class="cand-empty">Genera candidatos para ver las variantes de textura.</div>`;
+        return;
+      }
+      strip.innerHTML = state.candidates.map((candidate) => {
+        const sel = state.selected === candidate ? " selected" : "";
+        const esc = candidate.replaceAll("'", "\\'");
+        return `
+          <div class="cand-card${sel}" onclick="selectCandidate('${esc}')">
+            <img src="${toArtifactUrl(candidate)}" alt="候補" />
+            <div class="cand-actions">
+              <button class="btn btn-ok" onclick="event.stopPropagation();approve('${esc}')">✓</button>
+              <button class="btn btn-bad" onclick="event.stopPropagation();rejectCandidate('${esc}')">✗</button>
+            </div>
+          </div>`;
+      }).join("");
+    }
+
+    function renderOutputs() { /* integrated in status bar */ }
+
+    async function renderAssetSelectors() {
+      const q = (state.modelQuery || "").trim();
+      if (q.length === 1) {
+        byId("modelGallery").innerHTML = `<div style="color:var(--ink2);font-size:0.8rem;">Escribe al menos 2 caracteres para buscar.</div>`;
+        const modelNote = byId("model-limit-note");
+        if (modelNote) modelNote.textContent = "Búsqueda pausada para reducir carga (mínimo 2 caracteres).";
+        updateModelAutocomplete(q).catch((e) => log("Model autocomplete error", e.message));
+        return;
+      }
+      const data = await api(`/assets/model-search?q=${encodeURIComponent(q)}&limit=${state.maxModelCards}`);
+      const items = data.items || [];
+      log("ModelGallery selectors", {
+        query: q,
+        totalMatches: data.total || 0,
+        rendered: items.length,
+        maxModelCards: state.maxModelCards,
+      });
+
+      const modelNote = byId("model-limit-note");
+      if (modelNote) {
+        modelNote.textContent = `Mostrando ${items.length} de ${data.total || 0} resultado(s) para "${q || "*"}".`;
+      }
+
+      renderAssetBrowser(items);
+      if (!q || q.length >= 2) {
+        updateModelAutocomplete(q).catch((e) => log("Model autocomplete error", e.message));
+      }
+    }
+
+    async function updateModelAutocomplete(queryText) {
+      const q = String(queryText || "").trim();
+      const limit = q ? 12 : 100;
+      const data = await api(`/assets/model-search?q=${encodeURIComponent(q)}&limit=${limit}`);
+      const list = byId("modelSearchList");
+      if (!list) return;
+      list.innerHTML = (data.items || []).map((item) => {
+        const label = item.name || fileName(item.path);
+        return `<option value="${label}"></option>`;
+      }).join("");
+    }
+
+    function renderAssetBrowser(filteredModels) {
+      const t0 = performance.now();
+      state.modelMetaByPath = Object.fromEntries((filteredModels || []).map((m) => [m.path, m]));
+      byId("fabricGallery").innerHTML = state.assetImages.map((path) => {
+        const esc = path.replaceAll("'", "\\'");
+        const active = byId("imagePaths").value.trim() === path ? " selected" : "";
+        return `
+          <div class="asset-card${active}" onclick="pickFabric('${esc}')">
+            <img src="${toArtifactUrl(path)}" alt="tela" loading="lazy" />
+            <div class="ac-name">${fileName(path)}</div>
+          </div>`;
+      }).join("") || `<div style="color:var(--ink2);font-size:0.8rem;">Sin telas encontradas.</div>`;
+
+      byId("modelGallery").innerHTML = filteredModels.map((item, idx) => {
+        const esc = item.path.replaceAll("'", "\\'");
+        const active = byId("modelPath").value.trim() === item.path ? " selected" : "";
+        const previewPath = resolvePreviewModelPath(item.path);
+        const previewBadge = previewPath !== item.path ? `<span class="ac-badge">preview ${fileName(previewPath).split('.').pop().toUpperCase()}</span>` : "";
+        const garmentBadge = item.garment_type ? `<span class="ac-badge">${String(item.garment_type).toUpperCase()}</span>` : "";
+        const sourceBadge = item.source ? `<span class="ac-badge">${item.source === "deepfashion" ? "DF3D" : "LOCAL"}</span>` : "";
+        const cloudBadge = (item.is_point_cloud || isPointCloudPath(item.path)) ? `<span class="ac-badge">POINT CLOUD</span>` : "";
+        return `
+          <div class="asset-card${active}" onclick="pickModel('${esc}')">
+            <div class="model-thumb" id="modelThumb-${idx}">…</div>
+            <div class="ac-name">${fileName(item.path)}<span class="ac-badge">${modelFormat(item).toUpperCase()}</span>${garmentBadge}${sourceBadge}${cloudBadge}${previewBadge}</div>
+          </div>`;
+      }).join("") || `<div style="color:var(--ink2);font-size:0.8rem;">Sin modelos encontrados.</div>`;
+
+      const gallery = byId("modelGallery");
+      const cards = gallery ? gallery.querySelectorAll(".asset-card").length : 0;
+      const thumbs = gallery ? gallery.querySelectorAll(".model-thumb").length : 0;
+      log("ModelGallery DOM ready", {
+        cards,
+        thumbs,
+        expected: filteredModels.length,
+        ms: Math.round(performance.now() - t0),
+      });
+
+      renderModelThumbnails(filteredModels).catch((e) => log("Model thumbnails error", e.message));
+    }
+
+    async function refreshAll() {
+      const pid = projectId();
+      setStatus("Actualizando…");
+      const [candidatesResp, summary, ranking, metrics] = await Promise.all([
+        api(`/projects/${encodeURIComponent(pid)}/candidates`),
+        api(`/projects/${encodeURIComponent(pid)}/feedback-summary`),
+        api(`/projects/${encodeURIComponent(pid)}/ranking?limit=10`),
+        api(`/projects/${encodeURIComponent(pid)}/metrics`),
+      ]);
+      state.candidates = candidatesResp.candidates || [];
+      renderGallery();
+      renderStats(metrics, summary);
+      setStatus(`${state.candidates.length} candidatos · proyecto: ${pid}`);
+      log("Refreshed", { summary, ranking, metrics });
+      if (state.selected || state.selectedCandidatePath) {
+        await renderInteractivePreview();
+      }
+    }
+
+    function buildProjectIdFromPath(path) {
+      const file = (path || "").split("/").pop() || "project";
+      const base = file.split(".")[0] || "project";
+      return `case-${base}`.replace(/[^a-zA-Z0-9-]/g, "-");
+    }
+
+    async function renderModelThumbnails(models) {
+      if (!Array.isArray(models) || !models.length) return;
+
+      const runId = Date.now();
+      state.modelThumbRunId = runId;
+      log("ModelGallery thumb run start", { runId, count: models.length });
+
+      // Ensure Three.js and the main viewer renderer are ready (same pipeline as the interactive viewer)
+      await ensureThreeReady();
+      setupViewer();
+      const { THREE } = state.three;
+
+      // Save current viewer state to restore after thumbnails
+      const savedScene = state.scene;
+      const savedCamera = state.camera;
+      const savedObject = state.currentObject;
+      const savedRenderKey = state.lastRenderKey;
+
+      // Temporarily stop the animation loop
+      if (state.animHandle != null) {
+        cancelAnimationFrame(state.animHandle);
+        state.animHandle = null;
+      }
+
+      // Resize main renderer to thumbnail size
+      const mainRenderer = state.renderer;
+      const hostEl = byId("viewer-wrap");
+      const origW = hostEl.clientWidth || 800;
+      const origH = hostEl.clientHeight || 500;
+      mainRenderer.setSize(160, 160);
+
+      for (let i = 0; i < models.length; i++) {
+        if (state.modelThumbRunId !== runId) break;
+
+        const item = models[i];
+        const host = byId(`modelThumb-${i}`);
+        if (!host) continue;
+
+        host.textContent = "…";
+        const tThumb0 = performance.now();
+
+        try {
+          const sizeBytes = Number(item.size_bytes || 0);
+          if (sizeBytes > 80 * 1024 * 1024) {
+            host.innerHTML = `<div style="padding:8px;text-align:center;color:var(--warn);font-size:0.68rem;line-height:1.35;">Modelo muy grande\n(${Math.round(sizeBytes/1024/1024)} MB)</div>`;
+            continue;
+          }
+
+          const ext = modelExt(item.path);
+          if (ext === ".ply") {
+            host.innerHTML = `<div style="padding:8px;text-align:center;color:var(--ink2);font-size:0.68rem;line-height:1.35;">PLY\n(sin miniatura para rendimiento)</div>`;
+            continue;
+          }
+
+          // Minimal scene per thumbnail — same luces que el viewer principal
+          const thumbScene = new THREE.Scene();
+          thumbScene.background = new THREE.Color(0x111820);
+          thumbScene.add(new THREE.HemisphereLight(0xffffff, 0x203040, 1.2));
+          const key = new THREE.DirectionalLight(0xffffff, 1.6);
+          key.position.set(2, 3, 2);
+          thumbScene.add(key);
+          const fill = new THREE.DirectionalLight(0xddeeff, 0.5);
+          fill.position.set(-2, 1, -2);
+          thumbScene.add(fill);
+
+          const thumbCamera = new THREE.PerspectiveCamera(50, 1, 0.01, 5000);
+
+          const object = await loadModelObject(item.path, { silent: true });
+          object.updateMatrixWorld(true);
+
+          // Count meshes
+          let meshCount = 0;
+          object.traverse((child) => { if (child.isMesh || child.isSkinnedMesh) meshCount++; });
+          console.log(`[F2M thumb-${i}] ${fileName(item.path)} meshes=${meshCount}`);
+
+          // White material — cleaner than grey, shows silhouette well
+          object.traverse((child) => {
+            if (!child.isMesh && !child.isSkinnedMesh) return;
+            child.material = new THREE.MeshStandardMaterial({
+              color: 0xffffff,
+              roughness: 0.75,
+              metalness: 0.0,
+              side: THREE.DoubleSide,
+            });
+            child.material.needsUpdate = true;
+          });
+
+          // Auto-frame
+          // Auto-frame: scale FIRST, then re-center after scale
+          // (position.sub before scale shifts center incorrectly when scale != 1)
+          const bbPre = new THREE.Box3().setFromObject(object);
+          const szPre = bbPre.getSize(new THREE.Vector3());
+          const maxDim = Math.max(szPre.x, szPre.y, szPre.z) || 1;
+          console.log(`[F2M thumb-${i}] ${fileName(item.path)} meshes=${meshCount} maxDim=${maxDim.toFixed(1)}`);
+          object.scale.setScalar(1.8 / maxDim);
+          object.updateMatrixWorld(true);
+          object.position.sub(new THREE.Box3().setFromObject(object).getCenter(new THREE.Vector3()));
+          object.updateMatrixWorld(true);
+
+          const scaledBox = new THREE.Box3().setFromObject(object);
+          const scaledSize = scaledBox.getSize(new THREE.Vector3());
+          const radius = Math.max(scaledSize.x, scaledSize.y, scaledSize.z) * 0.6;
+          const fov = thumbCamera.fov * (Math.PI / 180);
+          const dist = Math.max(radius / Math.sin(fov / 2), 2.1);
+          thumbCamera.near = dist * 0.001;
+          thumbCamera.far = dist * 50;
+          thumbCamera.updateProjectionMatrix();
+          thumbCamera.position.set(dist * 0.6, dist * 0.25, dist);
+          thumbCamera.lookAt(0, 0, 0);
+
+          thumbScene.add(object);
+          mainRenderer.render(thumbScene, thumbCamera);
+
+          // Force GPU to finish all pending commands before reading the framebuffer
+          mainRenderer.getContext().finish();
+
+          const dataUrl = mainRenderer.domElement.toDataURL("image/png");
+          const totalMs = Math.round(performance.now() - tThumb0);
+          console.log(`[F2M thumb-${i}] rendered in ${totalMs}ms dataUrlLen=${dataUrl.length}`);
+
+          host.innerHTML = "";
+          const img = document.createElement("img");
+          img.src = dataUrl;
+          img.alt = fileName(item.path);
+          img.style.cssText = "width:100%;height:100%;object-fit:cover;display:block;border-radius:0;";
+          host.appendChild(img);
+
+          if (meshCount > 0) {
+            const badge = document.createElement("span");
+            badge.textContent = `${meshCount}m`;
+            badge.style.cssText = "position:absolute;bottom:3px;right:4px;font-size:0.6rem;background:rgba(0,0,0,0.55);color:#3ecfcf;border-radius:3px;padding:1px 4px;pointer-events:none;";
+            host.style.position = "relative";
+            host.appendChild(badge);
+          }
+
+          // Dispose thumb objects
+          object.traverse((child) => {
+            if (!child.isMesh && !child.isSkinnedMesh) return;
+            child.geometry?.dispose();
+            child.material?.dispose();
+          });
+        } catch (e) {
+          host.textContent = "—";
+          console.warn(`[F2M thumb-${i}] error:`, e.message);
+        }
+      }
+
+      // Restore renderer size and viewer state
+      mainRenderer.setSize(origW, origH);
+      if (savedCamera) {
+        savedCamera.aspect = origW / origH;
+        savedCamera.updateProjectionMatrix();
+      }
+
+      // Restore previous scene/object (if viewer was already showing something)
+      state.currentObject = savedObject;
+      state.lastRenderKey = savedRenderKey;
+
+      // Restart animation loop
+      const restartLoop = () => {
+        const loop = () => {
+          state.animHandle = requestAnimationFrame(loop);
+          state.controls && state.controls.update();
+          mainRenderer.render(savedScene || state.scene, savedCamera || state.camera);
+        };
+        loop();
+      };
+      restartLoop();
+
+      log("ModelGallery thumb run end", { runId, finalCount: models.length });
+    }
+
+    async function loadCatalog() {
+      const t0 = performance.now();
+      const data = await api("/assets/catalog");
+      state.assetImages = data.images || [];
+      state.assetModels = data.models || [];
+      state.targetModels = data.target_models || [];
+      log("Catalog loaded", {
+        images: state.assetImages.length,
+        models: state.assetModels.length,
+        targetModels: state.targetModels.length,
+        deepfashionModels: data.deepfashion_models_total || 0,
+        ms: Math.round(performance.now() - t0),
+      });
+      log("Model catalog", "Nota: abrir una URL .fbx directa devuelve binario (normal); la vista usa Three.js para cargarlo y renderizar miniaturas.");
+      await renderAssetSelectors();
+      if (state.assetImages.length && !byId("imagePaths").value.trim()) byId("imagePaths").value = state.assetImages[0];
+      const sourceModels = state.targetModels.length ? state.targetModels : state.assetModels;
+      if (sourceModels.length && !byId("modelPath").value.trim()) byId("modelPath").value = sourceModels[0].path;
+    }
+
+    function openFabricModal() {
+      byId("fabricUploadName").value = "";
+      byId("fabricUploadFile").value = "";
+      byId("fabricUploadPreview").innerHTML = "Preview";
+      byId("fabricModal").classList.add("open");
+    }
+
+    function closeFabricModal() {
+      byId("fabricModal").classList.remove("open");
+    }
+
+    async function uploadFabricFromModal() {
+      const name = byId("fabricUploadName").value.trim();
+      const file = byId("fabricUploadFile").files?.[0];
+      if (!name) { alert("Ingresa un nombre para la tela"); return; }
+      if (!file) { alert("Selecciona una imagen"); return; }
+      const dataUrl = await new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(r.result);
+        r.onerror = () => reject(new Error("No se pudo leer la imagen"));
+        r.readAsDataURL(file);
+      });
+      const resp = await api("/assets/upload-fabric", "POST", { name, data_url: dataUrl });
+      log("Fabric uploaded", resp);
+      closeFabricModal();
+      await loadCatalog();
+    }
+
+    function useSelectedFabric() {
+      const selected = byId("imagePaths").value.trim();
+      if (!selected) return;
+      byId("projectId").value = buildProjectIdFromPath(selected);
+      log("Fabric selected", { selected });
+    }
+
+    function useSelectedModel() {
+      const selected = byId("modelPath").value;
+      if (!selected) return;
+      state.modelReport = null;
+      renderUvNote();
+      log("Model selected", { selected });
+      api(`/projects/validate-model?model_path=${encodeURIComponent(selected)}`)
+        .then((report) => { state.modelReport = report; renderUvNote(); log("Model validation", report); })
+        .catch((err) => { log("Model validation error", err.message); renderUvNote(); });
+      if (state.selected || state.selectedCandidatePath) renderInteractivePreview();
+    }
+
+    async function runFullCase() {
+      const generated = await generateCandidates();
+      const first = (generated.candidates || [])[0];
+      if (!first) throw new Error("No candidates generated");
+      state.selected = first;
+      state.selectedCandidatePath = first;
+      renderGallery();
+      renderOutputs();
+      await renderInteractivePreview();
+      await previewSheet();
+      await preview3d();
+      await exportSelected();
+      await refreshAll();
+      log("Run Full Case completed", { selected: first });
+    }
+
+    async function importFromDownloads() {
+      const data = await api("/assets/import-from-downloads", "POST", {});
+      log("Import from Downloads", data);
+      await loadCatalog();
+      await refreshAll();
+    }
+
+    async function generateCandidates() {
+      const paths = byId("imagePaths").value.split("\n").map((x) => x.trim()).filter(Boolean);
+      const payload = { project_id: projectId(), image_paths: paths, n_candidates: Number(byId("nCandidates").value || 6) };
+      const data = await api("/projects/generate", "POST", payload);
+      const first = (data.candidates || [])[0] || null;
+      if (first) {
+        state.selected = first;
+        state.selectedCandidatePath = first;
+      }
+      log("Generated", data);
+      await refreshAll();
+      renderOutputs();
+      return data;
+    }
+
+    async function previewSheet() {
+      const pid = projectId();
+      const data = await api(`/projects/${encodeURIComponent(pid)}/preview-sheet`, "POST");
+      state.sheetPath = data.preview_path;
+      byId("sheetPreview").src = `${toArtifactUrl(state.sheetPath)}?t=${Date.now()}`;
+      renderOutputs();
+      log("2D preview sheet", data);
+    }
+
+    async function preview3d() {
+      if (!state.selected) { alert("Select a candidate first"); return; }
+      const modelPath = byId("modelPath").value.trim();
+      const isPointCloud = isPointCloudPath(modelPath) || Boolean(getModelMeta(modelPath)?.is_point_cloud);
+      if (isPointCloud) {
+        log("Preview3D", "Point cloud detectado: se intentara conversion automatica a malla proxy en backend.");
+      }
+      const pid = projectId();
+      const payload = {
+        project_id: pid,
+        model_path: modelPath,
+        texture_path: state.selected,
+        output_path: `data/processed/${pid}/preview/preview_from_ui.png`,
+        convert_point_cloud: true,
+      };
+      const data = await api("/projects/preview-3d", "POST", payload);
+      state.preview3dPath = data.preview_path;
+      state.modelReport = data.model_report || null;
+      renderModelContractNote();
+      await renderInteractivePreview();
+      renderOutputs();
+      log("3D preview", data);
+    }
+
+    async function exportSelected() {
+      if (!state.selected) { alert("Select a candidate first"); return; }
+      const modelPath = byId("modelPath").value.trim();
+      const isPointCloud = isPointCloudPath(modelPath) || Boolean(getModelMeta(modelPath)?.is_point_cloud);
+      if (isPointCloud) {
+        log("Export", "Point cloud detectado: se intentara conversion automatica a malla proxy en backend.");
+      }
+      const payload = {
+        project_id: projectId(),
+        model_path: modelPath,
+        selected_texture_path: state.selected,
+        output_path: byId("outputPath").value.trim(),
+        convert_point_cloud: true,
+      };
+      const data = await api("/projects/select", "POST", payload);
+      state.exportPath = data.output_path || null;
+      state.modelReport = data.model_report || null;
+      renderModelContractNote();
+      renderOutputs();
+      log("Export result", data);
+    }
+
+    window.selectCandidate = async function(candidate) {
+      state.selected = candidate;
+      state.selectedCandidatePath = candidate;
+      renderGallery();
+      renderOutputs();
+      log("Selected candidate", { candidate });
+      renderInteractivePreview();
+    };
+
+    window.approve = async function(candidate) {
+      state.selected = candidate;
+      state.selectedCandidatePath = candidate;
+      await api("/projects/feedback", "POST", {
+        project_id: projectId(),
+        candidate_path: candidate,
+        label: "approve",
+        score: 5,
+        comment: "approved from ui",
+      });
+      log("Feedback approve", { candidate });
+      await refreshAll();
+    };
+
+    window.rejectCandidate = async function(candidate) {
+      await api("/projects/feedback", "POST", {
+        project_id: projectId(),
+        candidate_path: candidate,
+        label: "reject",
+        score: 2,
+        comment: "rejected from ui",
+      });
+      log("Feedback reject", { candidate });
+      await refreshAll();
+    };
+
+    window.pickFabric = function(path) {
+      byId("imagePaths").value = path;
+      byId("projectId").value = buildProjectIdFromPath(path);
+      // highlight selection
+      document.querySelectorAll("#fabricGallery .asset-card").forEach(el => el.classList.remove("selected"));
+      document.querySelectorAll("#fabricGallery .asset-card").forEach(el => {
+        if (el.querySelector("img")?.src.includes(encodeURIComponent(path.split("/").pop()))) el.classList.add("selected");
+      });
+      log("Fabric picked", { path });
+    };
+
+    window.pickModel = function(path) {
+      byId("modelPath").value = path;
+      document.querySelectorAll("#modelGallery .asset-card").forEach(el => el.classList.remove("selected"));
+      useSelectedModel();
+    };
+
+    // Sidebar tabs
+    document.querySelectorAll(".stab").forEach(btn => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".stab").forEach(b => b.classList.remove("active"));
+        document.querySelectorAll(".stab-panel").forEach(p => p.classList.remove("active"));
+        btn.classList.add("active");
+        byId(btn.dataset.tab).classList.add("active");
+      });
+    });
+
+    // Console drawer toggle
+    byId("console-toggle").addEventListener("click", () => {
+      byId("console-drawer").classList.toggle("open");
+      byId("console-toggle").textContent = byId("console-drawer").classList.contains("open")
+        ? "▼ Consola de depuración" : "▲ Consola de depuración";
+    });
+
+    // Fabric angle slider
+    byId("fabricAngle").addEventListener("input", (e) => {
+      state.fabricAngleDeg = Number(e.target.value);
+      byId("fabricAngleVal").textContent = `${state.fabricAngleDeg}°`;
+      updateFabricTransform();
+    });
+
+    // Fabric scale slider
+    byId("fabricScale").addEventListener("input", (e) => {
+      state.fabricScale = Number(e.target.value);
+      byId("fabricScaleVal").textContent = `×${state.fabricScale}`;
+      updateFabricTransform();
+    });
+
+    byId("btnGenerate").addEventListener("click", () => generateCandidates().catch((e) => log("Error", e.message)));
+    byId("btnGenerate2").addEventListener("click", () => generateCandidates().catch((e) => log("Error", e.message)));
+    byId("btnRefresh").addEventListener("click", () => refreshAll().catch((e) => log("Error", e.message)));
+    byId("btnPreviewSheet").addEventListener("click", () => previewSheet().catch((e) => log("Error", e.message)));
+    byId("btnPreview3d").addEventListener("click", () => preview3d().catch((e) => log("Error", e.message)));
+    byId("btnExport").addEventListener("click", () => exportSelected().catch((e) => log("Error", e.message)));
+    byId("btnRunFullCase").addEventListener("click", () => runFullCase().catch((e) => log("Error", e.message)));
+    byId("btnImportDownloads").addEventListener("click", () => importFromDownloads().catch((e) => log("Error", e.message)));
+    byId("modelSearch").addEventListener("input", (e) => {
+      state.modelQuery = e.target.value || "";
+      if (state.modelSearchTimer) clearTimeout(state.modelSearchTimer);
+      state.modelSearchTimer = setTimeout(() => {
+        renderAssetSelectors().catch((err) => log("Model search error", err.message));
+      }, 220);
+    });
+
+    byId("btnOpenFabricUpload").addEventListener("click", openFabricModal);
+    byId("btnCloseFabricModal").addEventListener("click", closeFabricModal);
+    byId("btnUploadFabric").addEventListener("click", () => uploadFabricFromModal().catch((e) => log("Upload fabric error", e.message)));
+    byId("fabricModal").addEventListener("click", (e) => {
+      if (e.target.id === "fabricModal") closeFabricModal();
+    });
+    byId("fabricUploadFile").addEventListener("change", () => {
+      const f = byId("fabricUploadFile").files?.[0];
+      const preview = byId("fabricUploadPreview");
+      if (!f) { preview.innerHTML = "Preview"; return; }
+      const reader = new FileReader();
+      reader.onload = () => { preview.innerHTML = `<img src="${reader.result}" alt="preview" />`; };
+      reader.readAsDataURL(f);
+    });
+
+    setStatus("Cargando catálogo…");
+    Promise.all([loadCatalog(), refreshAll()]).catch((e) => { log("Startup error", e.message); setStatus("Error al iniciar"); });
+    renderOutputs();
+    renderUvNote();
+    setTimeout(() => renderInteractivePreview().catch(() => {}), 700);
+  </script>
+</body>
+</html>

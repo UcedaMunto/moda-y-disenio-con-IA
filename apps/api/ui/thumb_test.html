@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Thumb Test</title>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<style>
+  body { background:#111; color:#eee; font-family:monospace; padding:20px; }
+  #log { white-space:pre-wrap; background:#1a1a1a; padding:10px; border-radius:6px; font-size:0.8rem; max-height:300px; overflow:auto; }
+  .row { display:flex; gap:12px; flex-wrap:wrap; margin:16px 0; }
+  .card { background:#222; padding:8px; border-radius:6px; text-align:center; }
+  .card canvas, .card img { display:block; width:160px; height:160px; }
+  .label { font-size:0.7rem; color:#aaa; margin-top:4px; }
+  #renderCanvas { border:2px solid #3ecfcf; }
+  button { background:#3ecfcf; color:#111; border:none; padding:8px 16px; border-radius:4px; cursor:pointer; font-weight:bold; margin:4px; }
+</style>
+</head>
+<body>
+<h2>🔬 Thumbnail Render Test</h2>
+<p>Prueba aislada del pipeline de miniaturas Three.js.</p>
+
+<div>
+  <button onclick="runTest()">▶ Ejecutar test</button>
+  <button onclick="document.getElementById('captures').innerHTML=''">🗑 Limpiar capturas</button>
+</div>
+
+<div class="row">
+  <div class="card">
+    <canvas id="renderCanvas" width="160" height="160"></canvas>
+    <div class="label">Canvas vivo (renderer)</div>
+  </div>
+  <div id="captures" class="row"></div>
+</div>
+
+<div id="log">Log aparecerá aquí...\n</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+import { TGALoader } from 'three/addons/loaders/TGALoader.js';
+
+const logEl = document.getElementById('log');
+function log(...args) {
+  const msg = args.map(a => typeof a === 'object' ? JSON.stringify(a, null, 2) : String(a)).join(' ');
+  logEl.textContent += msg + '\n';
+  logEl.scrollTop = logEl.scrollHeight;
+  console.log(...args);
+}
+
+// Models to test — edit freely
+const MODELS = [
+  '/artifacts/raw/models/TShirts.obj',
+  '/artifacts/raw/models/TShirts_1.obj',
+  '/artifacts/raw/models/uploads_files_6483441_Basic%2Bbra%2Btop%2BCT25-151.fbx',
+];
+
+// Build renderer on the visible canvas already in the DOM
+const canvas = document.getElementById('renderCanvas');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, preserveDrawingBuffer: true });
+renderer.setSize(160, 160);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+log('Renderer creado. preserveDrawingBuffer:', renderer.domElement === canvas);
+
+async function loadModel(url) {
+  const lower = url.toLowerCase().split('?')[0];
+  if (lower.endsWith('.obj')) {
+    log('  OBJLoader ->', url);
+    return new OBJLoader().loadAsync(url);
+  }
+  if (lower.endsWith('.fbx')) {
+    log('  FBXLoader ->', url);
+    const mgr = new THREE.LoadingManager();
+    const onePx = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAukB9WnVb9sAAAAASUVORK5CYII=';
+    mgr.setURLModifier(u => /\.tga(\?.*)?$/i.test(u) ? onePx : u);
+    mgr.addHandler(/\.tga$/i, new TGALoader());
+    return new FBXLoader(mgr).loadAsync(url);
+  }
+  throw new Error('Formato no soportado: ' + url);
+}
+
+async function renderThumb(url, index) {
+  log(`\n[thumb-${index}] START ${url}`);
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x111820);
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x203040, 1.2));
+  const key = new THREE.DirectionalLight(0xffffff, 1.6);
+  key.position.set(2, 3, 2);
+  scene.add(key);
+  const fill = new THREE.DirectionalLight(0xddeeff, 0.5);
+  fill.position.set(-2, 1, -2);
+  scene.add(fill);
+
+  const camera = new THREE.PerspectiveCamera(50, 1, 0.01, 5000);
+
+  const t0 = performance.now();
+  const object = await loadModel(url);
+  log(`  Cargado en ${Math.round(performance.now()-t0)}ms`);
+  object.updateMatrixWorld(true);
+
+  let meshCount = 0;
+  object.traverse(c => { if (c.isMesh || c.isSkinnedMesh) meshCount++; });
+  log(`  meshes=${meshCount}`);
+
+  object.traverse(c => {
+    if (!c.isMesh && !c.isSkinnedMesh) return;
+    c.material = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.75, metalness: 0, side: THREE.DoubleSide });
+    c.material.needsUpdate = true;
+  });
+
+  // Step 1: scale first (object still at origin)
+  const bbPre = new THREE.Box3().setFromObject(object);
+  const szPre = bbPre.getSize(new THREE.Vector3());
+  const maxDim = Math.max(szPre.x, szPre.y, szPre.z) || 1;
+  log(`  BB size=(${szPre.x.toFixed(1)}, ${szPre.y.toFixed(1)}, ${szPre.z.toFixed(1)}) maxDim=${maxDim.toFixed(1)}`);
+  object.scale.setScalar(1.8 / maxDim);
+  object.updateMatrixWorld(true);
+  // Step 2: re-center AFTER scale — scaling shifts the world-space center
+  const bbPost = new THREE.Box3().setFromObject(object);
+  object.position.sub(bbPost.getCenter(new THREE.Vector3()));
+  object.updateMatrixWorld(true);
+
+  const bbFinal = new THREE.Box3().setFromObject(object);
+  const szFinal = bbFinal.getSize(new THREE.Vector3());
+  const radius = Math.max(szFinal.x, szFinal.y, szFinal.z) * 0.6;
+  const fov = camera.fov * (Math.PI / 180);
+  const dist = Math.max(radius / Math.sin(fov / 2), 2.1);
+  camera.near = dist * 0.001;
+  camera.far = dist * 50;
+  camera.updateProjectionMatrix();
+  camera.position.set(dist * 0.6, dist * 0.25, dist);
+  camera.lookAt(0, 0, 0);
+  log(`  dist=${dist.toFixed(2)} near=${camera.near.toFixed(4)} far=${camera.far.toFixed(1)} radius=${radius.toFixed(2)}`);
+
+  scene.add(object);
+  renderer.render(scene, camera);
+
+  // Force GPU to finish all pending commands before reading the framebuffer
+  renderer.getContext().finish();
+
+  const dataUrl = renderer.domElement.toDataURL('image/png');
+  log(`  dataUrlLen=${dataUrl.length} (>5000 = tiene contenido)`);
+
+  // Show captured image
+  const card = document.createElement('div');
+  card.className = 'card';
+  const img = document.createElement('img');
+  img.src = dataUrl;
+  const lbl = document.createElement('div');
+  lbl.className = 'label';
+  lbl.textContent = `[${index}] ${url.split('/').pop()} — ${dataUrl.length}b`;
+  card.appendChild(img);
+  card.appendChild(lbl);
+  document.getElementById('captures').appendChild(card);
+
+  // Dispose
+  object.traverse(c => {
+    if (!c.isMesh && !c.isSkinnedMesh) return;
+    c.geometry?.dispose();
+    c.material?.dispose();
+  });
+
+  log(`[thumb-${index}] DONE`);
+}
+
+// ---- BASIC TEST: render a simple box without loading any file ----
+function testBasicRender() {
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x222244);
+  const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
+  camera.position.set(0, 0, 3);
+
+  const mesh = new THREE.Mesh(
+    new THREE.BoxGeometry(1, 1, 1),
+    new THREE.MeshStandardMaterial({ color: 0xff4444 })
+  );
+  scene.add(mesh);
+  scene.add(new THREE.AmbientLight(0xffffff, 1));
+  const dl = new THREE.DirectionalLight(0xffffff, 2);
+  dl.position.set(2, 3, 2);
+  scene.add(dl);
+
+  renderer.render(scene, camera);
+  renderer.getContext().finish();
+  const dataUrl = renderer.domElement.toDataURL('image/png');
+
+  log(`[basicTest] dataUrlLen=${dataUrl.length} (esperado >3000 si hay contenido)`);
+
+  const card = document.createElement('div');
+  card.className = 'card';
+  const img = document.createElement('img');
+  img.src = dataUrl;
+  const lbl = document.createElement('div');
+  lbl.className = 'label';
+  lbl.textContent = `BasicBox — ${dataUrl.length}b`;
+  card.appendChild(img);
+  card.appendChild(lbl);
+  document.getElementById('captures').appendChild(card);
+
+  // Also check WebGL capabilities
+  const gl = renderer.getContext();
+  log(`[basicTest] WebGL version: ${gl.getParameter(gl.VERSION)}`);
+  log(`[basicTest] Renderer: ${gl.getParameter(gl.RENDERER)}`);
+  log(`[basicTest] Vendor: ${gl.getParameter(gl.VENDOR)}`);
+}
+
+window.runTest = async function() {
+  logEl.textContent = '';
+  document.getElementById('captures').innerHTML = '';
+  log('=== TEST START ===');
+  log('Three.js version:', THREE.REVISION);
+
+  log('\n--- [1] TEST BÁSICO: caja roja sin cargar archivos ---');
+  testBasicRender();
+
+  log('\n--- [2] TEST MODELOS: carga y render de archivos ---');
+  for (let i = 0; i < MODELS.length; i++) {
+    try { await renderThumb(MODELS[i], i); }
+    catch(e) { log(`  ERROR: ${e.message}`); }
+  }
+  log('\n=== TEST END ===');
+};
+</script>
+</body>
+</html>

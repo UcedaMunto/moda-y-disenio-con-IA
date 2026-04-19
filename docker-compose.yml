@@ -1,0 +1,51 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+      - /home/uceda/Downloads:/mnt/downloads:ro
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-almapa}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-asdfghjkl}
+      POSTGRES_DB: ${POSTGRES_DB:-fabricdb}
+      POSTGRES_HOST: ${POSTGRES_HOST:-db}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      DOWNLOADS_IMPORT_DIR: ${DOWNLOADS_IMPORT_DIR:-/mnt/downloads}
+    depends_on:
+      - db
+      - minio
+
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-almapa}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-asdfghjkl}
+      POSTGRES_DB: ${POSTGRES_DB:-fabricdb}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  minio:
+    image: minio/minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: admin
+      MINIO_ROOT_PASSWORD: password
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.16.2
+    command: mlflow server --host 0.0.0.0 --port 5000
+    ports:
+      - "5000:5000"
+
+volumes:
+  postgres_data:
+  minio_data:

@@ -1,0 +1,30 @@
+{
+  "version": "2.1.0",
+  "description": "Checklist visual interna para evaluar calidad de try-on en imagen estatica",
+  "criteria": [
+    {
+      "id": "alignment_shoulders",
+      "name": "Alineacion en hombros",
+      "weight": 0.25,
+      "pass_rule": "Prenda centrada y sin desfasaje notable en hombros"
+    },
+    {
+      "id": "torso_scale",
+      "name": "Escala del torso",
+      "weight": 0.25,
+      "pass_rule": "Escala proporcional al cuerpo sin sobreexpandir"
+    },
+    {
+      "id": "occlusion_consistency",
+      "name": "Consistencia de oclusion",
+      "weight": 0.25,
+      "pass_rule": "Regiones ocluyentes preservadas sin artefactos severos"
+    },
+    {
+      "id": "edge_artifacts",
+      "name": "Artefactos de borde",
+      "weight": 0.25,
+      "pass_rule": "Bordes de la prenda sin halos fuertes o cortes bruscos"
+    }
+  ]
+}
