@@ -421,10 +421,18 @@ def _run_fase21_manual_eval(request: Fase21TryOnManualEvalRequest) -> dict:
     )
 
 
-def _run_fase21_manual_eval_summary(report_path: str, project_id: str | None = None) -> dict:
+def _run_fase21_manual_eval_summary(
+    report_path: str,
+    project_id: str | None = None,
+    valid_score_threshold: float = 85.0,
+) -> dict:
     from fase2_1.core.tryon.review import summarize_manual_reviews
 
-    return summarize_manual_reviews(report_path=report_path, project_id=project_id)
+    return summarize_manual_reviews(
+        report_path=report_path,
+        project_id=project_id,
+        valid_score_threshold=valid_score_threshold,
+    )
 
 
 def _run_fase21_manual_eval_consolidated(
@@ -432,6 +440,7 @@ def _run_fase21_manual_eval_consolidated(
     manual_report_path: str,
     project_id: str | None = None,
     consolidated_path: str | None = None,
+    valid_score_threshold: float = 85.0,
 ) -> dict:
     from fase2_1.core.tryon.review import build_consolidated_evaluation_report
 
@@ -440,6 +449,7 @@ def _run_fase21_manual_eval_consolidated(
         manual_report_path=manual_report_path,
         project_id=project_id,
         consolidated_path=consolidated_path,
+        valid_score_threshold=valid_score_threshold,
     )
 
 
@@ -620,17 +630,24 @@ def evaluate_tryon_fase21(request: Fase21TryOnManualEvalRequest) -> dict:
 def evaluate_summary_tryon_fase21(
     report_path: str = "data/processed/fase2_1_eval/manual_reviews.jsonl",
     project_id: str | None = None,
+    valid_score_threshold: float = 85.0,
 ) -> dict:
     """Resume evaluaciones manuales para un proyecto de Fase 2.1."""
     try:
-        payload = _run_fase21_manual_eval_summary(report_path=report_path, project_id=project_id)
+        payload = _run_fase21_manual_eval_summary(
+            report_path=report_path,
+            project_id=project_id,
+            valid_score_threshold=valid_score_threshold,
+        )
         track_event(
             event_name="fase2_1_tryon_manual_eval_summary",
             payload={
                 "project_id": project_id or "all",
                 "report_path": report_path,
+                "valid_score_threshold": valid_score_threshold,
                 "total": payload.get("total", 0),
                 "avg_score": payload.get("avg_score", 0),
+                "visually_valid_rate": payload.get("visually_valid_rate", 0),
             },
         )
     except Exception as exc:
@@ -644,6 +661,7 @@ def evaluate_consolidated_tryon_fase21(
     manual_report_path: str = "data/processed/fase2_1_eval/manual_reviews.jsonl",
     project_id: str | None = None,
     consolidated_path: str | None = None,
+    valid_score_threshold: float = 85.0,
 ) -> dict:
     """Construye resumen consolidado (batch + evaluacion manual) de Fase 2.1."""
     try:
@@ -652,6 +670,7 @@ def evaluate_consolidated_tryon_fase21(
             manual_report_path=manual_report_path,
             project_id=project_id,
             consolidated_path=consolidated_path,
+            valid_score_threshold=valid_score_threshold,
         )
         summary = payload.get("summary", {})
         track_event(
@@ -660,8 +679,10 @@ def evaluate_consolidated_tryon_fase21(
                 "project_id": project_id or "all",
                 "batch_report_path": batch_report_path,
                 "manual_report_path": manual_report_path,
+                "valid_score_threshold": valid_score_threshold,
                 "manual_total": summary.get("manual_total", 0),
                 "manual_avg_score": summary.get("manual_avg_score", 0),
+                "manual_visually_valid_rate": summary.get("manual_visually_valid_rate", 0),
                 "batch_success_rate": summary.get("batch_success_rate", 0),
             },
         )

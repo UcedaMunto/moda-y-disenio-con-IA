@@ -24,6 +24,11 @@ def build_consolidated_report(batch_payload: dict, manual_summary: dict, consoli
             "manual_avg_score": manual_summary.get("avg_score", 0.0),
             "manual_min_score": manual_summary.get("min_score", 0.0),
             "manual_max_score": manual_summary.get("max_score", 0.0),
+            "manual_valid_threshold": manual_summary.get("valid_score_threshold", 85.0),
+            "manual_visually_valid": manual_summary.get("visually_valid_count", 0),
+            "manual_visually_valid_rate": manual_summary.get("visually_valid_rate", 0.0),
+            "manual_acceptance_target_rate": 90.0,
+            "manual_acceptance_passed": manual_summary.get("visually_valid_rate", 0.0) >= 90.0,
             "checklist_version": auto_summary.get("checklist_version", "unknown"),
         },
         "manual": manual_summary,
@@ -61,6 +66,12 @@ def main() -> None:
     )
     parser.add_argument("--project-id", default=None, help="Filtra evaluaciones manuales por project_id")
     parser.add_argument("--checklist-path", default=None, help="Ruta opcional del checklist de calidad")
+    parser.add_argument(
+        "--valid-score-threshold",
+        type=float,
+        default=85.0,
+        help="Umbral de score manual para considerar un caso visualmente valido",
+    )
     args = parser.parse_args()
 
     batch = run_tryon_batch(
@@ -74,12 +85,17 @@ def main() -> None:
     )
 
     batch_payload = batch.model_dump()
-    manual_summary = summarize_manual_reviews(report_path=args.manual_report, project_id=args.project_id)
+    manual_summary = summarize_manual_reviews(
+        report_path=args.manual_report,
+        project_id=args.project_id,
+        valid_score_threshold=args.valid_score_threshold,
+    )
     consolidated = build_consolidated_evaluation_report(
         batch_report_path=batch_payload.get("report_path", args.report),
         manual_report_path=args.manual_report,
         project_id=args.project_id,
         consolidated_path=args.consolidated_report,
+        valid_score_threshold=args.valid_score_threshold,
     )
     print(json.dumps(consolidated, indent=2))
 

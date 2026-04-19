@@ -64,9 +64,14 @@ def tryon_evaluate(request: TryOnManualEvalRequest) -> dict:
 def tryon_evaluate_summary(
     report_path: str = "data/processed/fase2_1_eval/manual_reviews.jsonl",
     project_id: str | None = None,
+    valid_score_threshold: float = 85.0,
 ) -> dict:
     try:
-        return summarize_manual_reviews(report_path=report_path, project_id=project_id)
+        return summarize_manual_reviews(
+            report_path=report_path,
+            project_id=project_id,
+            valid_score_threshold=valid_score_threshold,
+        )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -77,6 +82,7 @@ def tryon_evaluate_consolidated(
     manual_report_path: str = "data/processed/fase2_1_eval/manual_reviews.jsonl",
     project_id: str | None = None,
     consolidated_path: str | None = None,
+    valid_score_threshold: float = 85.0,
 ) -> dict:
     try:
         return build_consolidated_evaluation_report(
@@ -84,6 +90,7 @@ def tryon_evaluate_consolidated(
             manual_report_path=manual_report_path,
             project_id=project_id,
             consolidated_path=consolidated_path,
+            valid_score_threshold=valid_score_threshold,
         )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

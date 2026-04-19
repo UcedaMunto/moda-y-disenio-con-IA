@@ -25,6 +25,11 @@ Tambien disponible desde API principal:
 - GET /fase2_1/tryon/evaluate-summary
 - GET /fase2_1/tryon/evaluate-consolidated
 
+Query params adicionales para evaluacion:
+
+- `valid_score_threshold` (float, default `85.0`) en `GET /tryon/evaluate-summary` y `GET /tryon/evaluate-consolidated`.
+- Se usa para calcular `visually_valid_rate` y la bandera consolidada `manual_acceptance_passed` (objetivo >= 90%).
+
 Ejemplo payload:
 
 ```json

@@ -69,9 +69,14 @@ def test_fase2_1_tryon_manual_eval_error(monkeypatch) -> None:
 def test_fase2_1_tryon_manual_eval_summary_ok(tmp_path: Path, monkeypatch) -> None:
     report = tmp_path / "manual_reviews.jsonl"
 
-    def fake_summary(report_path: str, project_id: str | None = None):
+    def fake_summary(
+        report_path: str,
+        project_id: str | None = None,
+        valid_score_threshold: float = 85.0,
+    ):
         assert report_path == str(report)
         assert project_id == "fase2_1"
+        assert valid_score_threshold == 88.0
         return {
             "status": "ok",
             "report_path": str(report),
@@ -83,13 +88,16 @@ def test_fase2_1_tryon_manual_eval_summary_ok(tmp_path: Path, monkeypatch) -> No
             "latest_ts": 1,
             "by_reviewer": {"qa": 3},
             "checklist_versions": {"2.1.0": 3},
+            "valid_score_threshold": 88.0,
+            "visually_valid_count": 2,
+            "visually_valid_rate": 66.67,
         }
 
     monkeypatch.setattr(api_main, "_run_fase21_manual_eval_summary", fake_summary)
 
     response = client.get(
         "/fase2_1/tryon/evaluate-summary",
-        params={"report_path": str(report), "project_id": "fase2_1"},
+        params={"report_path": str(report), "project_id": "fase2_1", "valid_score_threshold": 88.0},
     )
 
     assert response.status_code == 200
@@ -97,12 +105,18 @@ def test_fase2_1_tryon_manual_eval_summary_ok(tmp_path: Path, monkeypatch) -> No
     assert payload["status"] == "ok"
     assert payload["total"] == 3
     assert payload["avg_score"] == 88.2
+    assert payload["visually_valid_rate"] == 66.67
 
 
 def test_fase2_1_tryon_manual_eval_summary_error(monkeypatch) -> None:
-    def fake_fail(report_path: str, project_id: str | None = None):
+    def fake_fail(
+        report_path: str,
+        project_id: str | None = None,
+        valid_score_threshold: float = 85.0,
+    ):
         assert isinstance(report_path, str)
         assert project_id is None or isinstance(project_id, str)
+        assert isinstance(valid_score_threshold, float)
         raise RuntimeError("summary failed")
 
     monkeypatch.setattr(api_main, "_run_fase21_manual_eval_summary", fake_fail)
@@ -122,11 +136,13 @@ def test_fase2_1_tryon_manual_eval_consolidated_ok(tmp_path: Path, monkeypatch) 
         manual_report_path: str,
         project_id: str | None = None,
         consolidated_path: str | None = None,
+        valid_score_threshold: float = 85.0,
     ):
         assert batch_report_path == str(batch_report)
         assert manual_report_path == str(manual_report)
         assert project_id == "fase2_1"
         assert consolidated_path is None
+        assert valid_score_threshold == 87.0
         return {
             "status": "ok",
             "summary": {
@@ -134,6 +150,7 @@ def test_fase2_1_tryon_manual_eval_consolidated_ok(tmp_path: Path, monkeypatch) 
                 "batch_success_rate": 100.0,
                 "manual_total": 2,
                 "manual_avg_score": 88.5,
+                "manual_visually_valid_rate": 100.0,
             },
         }
 
@@ -145,6 +162,7 @@ def test_fase2_1_tryon_manual_eval_consolidated_ok(tmp_path: Path, monkeypatch) 
             "batch_report_path": str(batch_report),
             "manual_report_path": str(manual_report),
             "project_id": "fase2_1",
+            "valid_score_threshold": 87.0,
         },
     )
 
@@ -152,6 +170,7 @@ def test_fase2_1_tryon_manual_eval_consolidated_ok(tmp_path: Path, monkeypatch) 
     payload = response.json()
     assert payload["status"] == "ok"
     assert payload["summary"]["manual_avg_score"] == 88.5
+    assert payload["summary"]["manual_visually_valid_rate"] == 100.0
 
 
 def test_fase2_1_tryon_manual_eval_consolidated_error(monkeypatch) -> None:
@@ -160,11 +179,13 @@ def test_fase2_1_tryon_manual_eval_consolidated_error(monkeypatch) -> None:
         manual_report_path: str,
         project_id: str | None = None,
         consolidated_path: str | None = None,
+        valid_score_threshold: float = 85.0,
     ):
         assert isinstance(batch_report_path, str)
         assert isinstance(manual_report_path, str)
         assert project_id is None or isinstance(project_id, str)
         assert consolidated_path is None or isinstance(consolidated_path, str)
+        assert isinstance(valid_score_threshold, float)
         raise RuntimeError("consolidated failed")
 
     monkeypatch.setattr(api_main, "_run_fase21_manual_eval_consolidated", fake_fail)

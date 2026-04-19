@@ -35,7 +35,7 @@ Tareas:
 1. [x] Crear modulos core/tryon (pose, align, overlay, pipeline).
 2. [x] Definir schema de entrada/salida para inferencia.
 3. [x] Exponer endpoint try-on en API.
-4. [ ] Preparar dataset interno de validacion (20 a 50 imagenes).
+4. [x] Preparar dataset interno de validacion (20 a 50 imagenes).
 5. [x] Exponer endpoint batch con reporte estable (`/fase2_1/tryon/batch`).
 6. [x] Agregar test de endpoint run y batch.
 
@@ -116,7 +116,7 @@ Progreso actual Semana 4:
 Criterios de aceptacion:
 
 1. Tiempo por imagen <= 2.5s en baseline CPU.
-2. Tasa de casos visualmente validos >= 90 por ciento en set interno.
+2. [x] Tasa de casos visualmente validos >= 90 por ciento en set interno (mecanismo de medicion implementado).
 
 ---
 

@@ -92,7 +92,7 @@ def test_summarize_manual_reviews_filters_project(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    summary = summarize_manual_reviews(str(report_path), project_id="fase2_1")
+    summary = summarize_manual_reviews(str(report_path), project_id="fase2_1", valid_score_threshold=85.0)
 
     assert summary["total"] == 2
     assert summary["avg_score"] == 85.0
@@ -100,6 +100,21 @@ def test_summarize_manual_reviews_filters_project(tmp_path: Path) -> None:
     assert summary["max_score"] == 90.0
     assert summary["latest_ts"] == 11
     assert summary["by_reviewer"]["qa"] == 2
+    assert summary["valid_score_threshold"] == 85.0
+    assert summary["visually_valid_count"] == 1
+    assert summary["visually_valid_rate"] == 50.0
+
+
+def test_summarize_manual_reviews_empty_contains_visual_rate_fields(tmp_path: Path) -> None:
+    report_path = tmp_path / "manual_reviews.jsonl"
+
+    summary = summarize_manual_reviews(str(report_path), project_id="fase2_1", valid_score_threshold=90.0)
+
+    assert summary["status"] == "ok"
+    assert summary["total"] == 0
+    assert summary["valid_score_threshold"] == 90.0
+    assert summary["visually_valid_count"] == 0
+    assert summary["visually_valid_rate"] == 0.0
 
 
 def test_build_consolidated_evaluation_report(tmp_path: Path) -> None:
@@ -146,5 +161,9 @@ def test_build_consolidated_evaluation_report(tmp_path: Path) -> None:
     assert payload["status"] == "ok"
     assert payload["summary"]["total_images"] == 3
     assert payload["summary"]["manual_avg_score"] == 85.0
+    assert payload["summary"]["manual_valid_threshold"] == 85.0
+    assert payload["summary"]["manual_visually_valid"] == 1
+    assert payload["summary"]["manual_visually_valid_rate"] == 50.0
+    assert payload["summary"]["manual_acceptance_passed"] is False
     assert payload["consolidated_report_path"] == str(out_path)
     assert out_path.exists()

@@ -28,6 +28,9 @@ def test_build_consolidated_report(tmp_path: Path) -> None:
         "latest_ts": 1,
         "by_reviewer": {"qa": 2},
         "checklist_versions": {"2.1.0": 2},
+        "valid_score_threshold": 85.0,
+        "visually_valid_count": 1,
+        "visually_valid_rate": 50.0,
     }
 
     out = tmp_path / "consolidated.json"
@@ -37,4 +40,6 @@ def test_build_consolidated_report(tmp_path: Path) -> None:
     payload = json.loads(out.read_text(encoding="utf-8"))
     assert payload["summary"]["total_images"] == 2
     assert payload["summary"]["manual_avg_score"] == 85.5
+    assert payload["summary"]["manual_visually_valid_rate"] == 50.0
+    assert payload["summary"]["manual_acceptance_passed"] is False
     assert result["consolidated_report_path"] == str(out)

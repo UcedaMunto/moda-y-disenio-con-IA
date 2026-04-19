@@ -43,6 +43,13 @@ python fase2_1/scripts/evaluate_batch.py \
    --garment-path data/raw/models/TShirts.obj \
    --garment-type shirt
 
+# Preparar set interno de validación (20-50 imágenes)
+python fase2_1/scripts/prepare_validation_dataset.py \
+   --input-dir data/raw/personas \
+   --manifest-path data/processed/fase2_1_eval/validation_manifest.json \
+   --min-images 20 \
+   --max-images 50
+
 # Benchmark de latencia (Semana 4)
 python fase2_1/scripts/benchmark_latency.py \
    --input-dir data/raw/personas \
@@ -50,6 +57,12 @@ python fase2_1/scripts/benchmark_latency.py \
    --garment-type shirt \
    --target-max-ms 2500
 ```
+
+Metrica de validez visual manual:
+
+- `GET /fase2_1/tryon/evaluate-summary` acepta `valid_score_threshold` (default `85.0`).
+- `visually_valid_rate` = casos con `score >= valid_score_threshold` sobre total manual.
+- Criterio de aceptacion Semana 4: `manual_visually_valid_rate >= 90.0`.
 
 ---
 
@@ -83,12 +96,12 @@ sequenceDiagram
     API-->>U: evaluacion guardada
 
     U->>API: GET /fase2_1/tryon/evaluate-summary
-    API->>Q: summarize_manual_reviews(project_id)
+   API->>Q: summarize_manual_reviews(project_id, valid_score_threshold)
     Q-->>API: resumen manual
     API-->>U: metricas manuales
 
     U->>API: GET /fase2_1/tryon/evaluate-consolidated
-    API->>Q: build_consolidated_evaluation_report()
+   API->>Q: build_consolidated_evaluation_report(valid_score_threshold)
     Q->>FS: consolidated_report.json (opcional)
     Q-->>API: resumen combinado batch+manual
     API-->>U: metricas consolidadas
