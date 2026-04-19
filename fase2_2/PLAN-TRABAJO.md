@@ -81,10 +81,16 @@ Objetivo:
 
 Tareas:
 
-1. [ ] Adaptar `parsing.py` para aceptar modelo fine-tuneado.
+1. [x] Adaptar `parsing.py` para aceptar modelo fine-tuneado.
 2. [ ] Script de fine-tuning sobre backbone ligero (MobileNet o similar).
 3. [ ] Evaluacion de IoU en conjunto de validacion.
 4. [ ] Registrar experimento en MLflow.
+
+Progreso actual Semana 3:
+
+- [x] Adaptador `core/tryon/parsing_adapter.py` con `segment_person_v2` y carga de config de modelo fine-tuneado.
+- [x] Soporte para `model_config_path` (threshold/backend/model_name) sin romper fallback robusto de Fase 2.1.
+- [x] Tests `test_fase2_2_parsing_adapter.py` (5 tests, 5 passed).
 
 ---
 
