@@ -82,15 +82,18 @@ Objetivo:
 Tareas:
 
 1. [x] Adaptar `parsing.py` para aceptar modelo fine-tuneado.
-2. [ ] Script de fine-tuning sobre backbone ligero (MobileNet o similar).
-3. [ ] Evaluacion de IoU en conjunto de validacion.
-4. [ ] Registrar experimento en MLflow.
+2. [x] Script de fine-tuning sobre backbone ligero (MobileNet o similar).
+3. [x] Evaluacion de IoU en conjunto de validacion.
+4. [x] Registrar experimento en MLflow.
 
 Progreso actual Semana 3:
 
 - [x] Adaptador `core/tryon/parsing_adapter.py` con `segment_person_v2` y carga de config de modelo fine-tuneado.
 - [x] Soporte para `model_config_path` (threshold/backend/model_name) sin romper fallback robusto de Fase 2.1.
 - [x] Tests `test_fase2_2_parsing_adapter.py` (5 tests, 5 passed).
+- [x] Script `train_segmentation_lite.py` con calibracion de threshold, evaluacion train/val IoU y artefacto de config entrenada.
+- [x] Tracking MLflow opcional en entrenamiento de segmentacion (`MLFLOW_TRACKING_ENABLED`).
+- [x] Tests `test_fase2_2_train_segmentation_lite.py` (3 tests, 3 passed).
 
 ---
 
@@ -102,10 +105,16 @@ Objetivo:
 
 Tareas:
 
-1. [ ] Integrar prediccion de offset en `pipeline.py`.
+1. [x] Integrar prediccion de offset en `pipeline.py`.
 2. [ ] Benchmark comparativo 2.1 vs 2.2 (visual + metrico).
 3. [ ] Documentar limites conocidos y backlog 2.3.
 4. [ ] Demo interna con casos representativos.
+
+Progreso actual Semana 4:
+
+- [x] Pipeline `core/tryon/pipeline_v2.py` con transformacion por modelo (scale + offset_x + offset_y).
+- [x] Integracion de segmentacion v2 (`segment_person_v2`) y metadata de trazabilidad en `meta.transform_source`.
+- [x] Tests `test_fase2_2_pipeline_v2.py` (2 tests, 2 passed).
 
 ---
 
