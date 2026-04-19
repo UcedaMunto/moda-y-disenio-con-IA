@@ -115,22 +115,26 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/rocm5
 
 ### 🧠 IA local (HOST)
 
-* torch (ROCm)
-* diffusers
-* transformers
-* accelerate
-* peft (LoRA)
-* safetensors
+| Herramienta | Para que se usa en el proyecto |
+|---|---|
+| torch (ROCm) | Framework base de deep learning para entrenamiento e inferencia en GPU AMD con ROCm. |
+| diffusers | Pipelines de modelos de difusion para generar texturas e imagenes a partir de prompts o referencias. |
+| transformers | Soporte para modelos tipo Transformer (texto/vision) usados dentro de pipelines modernos de generacion. |
+| accelerate | Optimiza y simplifica ejecucion en GPU/CPU (memoria, precision, batch, distribucion). |
+| peft (LoRA) | Fine-tuning eficiente con LoRA para adaptar modelos grandes al dominio de telas sin reentrenar todo. |
+| safetensors | Formato seguro y rapido para cargar/guardar pesos de modelos sin usar serializacion insegura. |
 
 ---
 
 ### 🧵 Procesamiento de imagen
 
-* opencv-python
-* pillow
-* numpy
-* scikit-image
-* albumentations
+| Herramienta | Para que se usa en el proyecto |
+|---|---|
+| opencv-python | Limpieza y preprocesamiento de imagen: lectura/escritura, conversiones de color, filtros, mascaras y ajustes geometricos antes de generar texturas. |
+| pillow | Manipulacion simple de imagenes para cargar, guardar, redimensionar y componer previews o exportaciones intermedias. |
+| numpy | Base numerica para representar imagenes como arreglos y aplicar operaciones rapidas sobre pixeles, canales y mascaras. |
+| scikit-image | Utilidades de procesamiento mas especializadas, como metricas visuales, filtros adicionales, segmentacion y transformaciones complementarias. |
+| albumentations | Pipeline de aumentacion de datos para entrenamiento y pruebas, con variaciones controladas de iluminacion, rotacion, recorte, ruido y deformacion. |
 
 ---
 

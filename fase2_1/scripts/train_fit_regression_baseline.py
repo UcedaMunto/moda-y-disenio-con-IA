@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 from fase2_1.core.training.fit_regression.baseline import (
@@ -11,6 +12,27 @@ from fase2_1.core.training.fit_regression.baseline import (
     load_rows_from_jsonl,
     save_model,
 )
+
+
+def _mlflow_log(params: dict, metrics: dict, artifact_path: str | None) -> None:
+    tracking_enabled = os.environ.get("MLFLOW_TRACKING_ENABLED", "0").strip() not in ("", "0", "false", "False")
+    if not tracking_enabled:
+        return
+    try:
+        import mlflow  # type: ignore
+
+        tracking_uri = os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:5000")
+        mlflow.set_tracking_uri(tracking_uri)
+        experiment_name = os.environ.get("MLFLOW_EXPERIMENT_NAME", "fit_regression_baseline")
+        mlflow.set_experiment(experiment_name)
+
+        with mlflow.start_run():
+            mlflow.log_params(params)
+            mlflow.log_metrics(metrics)
+            if artifact_path:
+                mlflow.log_artifact(artifact_path)
+    except Exception as exc:  # pragma: no cover
+        print(f"[mlflow] tracking omitido: {exc}", flush=True)
 
 
 def main() -> None:
@@ -37,10 +59,26 @@ def main() -> None:
     model["l2"] = args.l2
 
     saved = save_model(model, args.output_model)
+
+    metrics = model.get("metrics", {})
+    _mlflow_log(
+        params={
+            "l2": args.l2,
+            "dataset_jsonl": str(Path(args.dataset_jsonl).name),
+            "feature_dim": model.get("feature_dim", 0),
+            "n_samples": metrics.get("n_samples", 0),
+        },
+        metrics={
+            "train_mae": metrics.get("train_mae", 0.0),
+            "train_rmse": metrics.get("train_rmse", 0.0),
+        },
+        artifact_path=saved,
+    )
+
     payload = {
         "status": "ok",
         "saved_model_path": saved,
-        "metrics": model.get("metrics", {}),
+        "metrics": metrics,
         "feature_dim": model.get("feature_dim", 0),
     }
     print(json.dumps(payload, indent=2, ensure_ascii=False))

@@ -84,8 +84,8 @@ Tareas:
 
 1. [x] Pipeline de datos para fine-tuning de segmentacion.
 2. [x] Estructura de entrenamiento de ajuste geometrico (fit_regression).
-3. Registro de experimentos con MLflow.
-4. Primer experimento entrenado reproducible.
+3. [x] Registro de experimentos con MLflow.
+4. [x] Primer experimento entrenado reproducible.
 
 Criterios de aceptacion:
 
@@ -97,6 +97,8 @@ Progreso actual Semana 3:
 - [x] Script reproducible para pairing/split de dataset de segmentacion (`prepare_segmentation_dataset.py`).
 - [x] Manifests train/val/test en JSONL + `manifest.json` de trazabilidad.
 - [x] Baseline de entrenamiento para `fit_regression` (ridge) con persistencia de modelo y metricas.
+- [x] MLflow tracking opcional (`MLFLOW_TRACKING_ENABLED`) con log de params, metricas y artefacto.
+- [x] Primera corrida reproducible ejecutada: `model_baseline_run1.json` (train_mae=0.000496, train_rmse=0.000742, n_samples=5, feature_dim=17).
 
 ---
 
