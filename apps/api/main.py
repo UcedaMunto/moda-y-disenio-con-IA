@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from fastapi import HTTPException
 import base64
 import binascii
+import json
 import os
 import re
 import time
@@ -479,6 +480,17 @@ def _enrich_model_report_with_conversion(model_report: dict, conversion_report: 
     return enriched
 
 
+def _run_deepfashion_coverage(include_samples: bool = True, sample_limit: int = 25) -> dict:
+    from scripts.analyze_deepfashion_coverage import build_coverage_report
+
+    return build_coverage_report(
+        old_root=DEEPFASHION_ANTIGUO_DIR,
+        new_root=DEEPFASHION_DIR,
+        include_samples=include_samples,
+        sample_limit=max(1, int(sample_limit)),
+    )
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     try:
@@ -501,6 +513,28 @@ def validate_model_endpoint(model_path: str) -> dict:
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return model_report
+
+
+@app.get("/assets/deepfashion-coverage")
+def deepfashion_coverage(refresh: bool = False, include_samples: bool = True, sample_limit: int = 25) -> dict:
+    report_path = DATA_DIR / "processed" / "deepfashion" / "coverage_report.json"
+
+    if not refresh and report_path.exists():
+        try:
+            payload = json.loads(report_path.read_text(encoding="utf-8"))
+            payload["cached"] = True
+            payload["report_path"] = str(report_path)
+            return payload
+        except Exception:
+            # If cached file is corrupted, regenerate below.
+            pass
+
+    payload = _run_deepfashion_coverage(include_samples=include_samples, sample_limit=sample_limit)
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    payload["cached"] = False
+    payload["report_path"] = str(report_path)
+    return payload
 
 
 @app.post("/assets/import-from-downloads")
