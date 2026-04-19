@@ -59,10 +59,17 @@ Objetivo:
 
 Tareas:
 
-1. [ ] Script de descarga/preparacion de subset publico (LIP o supervisely-person).
-2. [ ] Validacion automatica de calidad de mascaras (IoU con segmentacion automatica).
-3. [ ] Manifest JSONL con metadatos por par.
-4. [ ] Tests de pipeline de carga.
+1. [x] Script de descarga/preparacion de subset publico (LIP o supervisely-person).
+2. [x] Validacion automatica de calidad de mascaras (IoU con segmentacion automatica).
+3. [x] Manifest JSONL con metadatos por par.
+4. [x] Tests de pipeline de carga.
+
+Progreso actual Semana 2:
+
+- [x] Script `prepare_segmentation_real_dataset.py` para preparar subset local de dataset publico ya descargado.
+- [x] Validacion por muestra con `iou_auto` contra segmentacion automatica (`segment_person`).
+- [x] Generacion de `train.jsonl`, `val.jsonl`, `test.jsonl`, `low_iou.jsonl` y `manifest.json`.
+- [x] Tests `test_fase2_2_prepare_segmentation_real_dataset.py` (4 tests, 4 passed).
 
 ---
 
