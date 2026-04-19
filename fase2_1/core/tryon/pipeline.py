@@ -21,7 +21,8 @@ def run_tryon(request: TryOnRequest) -> TryOnResult:
     scale = compute_scale(landmarks, garment_type=request.garment_type)
     landmarks_contract = build_landmarks_contract(landmarks)
     transform_contract = build_transform_contract(scale=scale, garment_type=request.garment_type)
-    seg = segment_person(request.image_path)
+    mask_output_path = str(Path(request.output_path).with_suffix(".person_mask.png"))
+    seg = segment_person(request.image_path, output_mask_path=mask_output_path)
 
     src = Path(request.image_path)
     out = Path(request.output_path)
@@ -41,5 +42,7 @@ def run_tryon(request: TryOnRequest) -> TryOnResult:
             "transform_contract": transform_contract,
             "segmentation_backend": seg.backend,
             "segmentation_note": seg.note,
+            "segmentation_mask_path": seg.mask_path,
+            "segmentation_mask_coverage": seg.mask_coverage,
         },
     )

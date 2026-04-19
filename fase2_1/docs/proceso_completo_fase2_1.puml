@@ -1,0 +1,90 @@
+@startuml
+!theme plain
+skinparam shadowing false
+skinparam defaultFontName Monospace
+skinparam packageStyle rectangle
+
+actor Usuario
+participant "UI / Cliente" as UI
+participant "API Principal\napps/api/main.py" as API
+participant "API Fase 2.1\nfase2_1/api/main.py" as API21
+participant "Pipeline TryOn\ncore/tryon/pipeline.py" as P
+participant "Pose\ncore/tryon/pose.py" as Pose
+participant "Parsing\ncore/tryon/parsing.py" as Parsing
+participant "Align\ncore/tryon/align.py" as Align
+participant "Contract\ncore/tryon/contract.py" as Contract
+participant "Batch\ncore/tryon/batch.py" as Batch
+participant "Review\ncore/tryon/review.py" as Review
+database "Artifacts\nreport.json / manual_reviews.jsonl / consolidated.json" as FS
+participant "Scripts\nevaluate_batch.py\nbenchmark_latency.py\nprepare_validation_dataset.py" as Scripts
+
+== Ejecucion single try-on ==
+Usuario -> UI: Solicita prueba de prenda
+UI -> API: POST /fase2_1/tryon/run
+API -> P: run_tryon(request)
+P -> Pose: detect_pose(image)
+Pose --> P: landmarks
+P -> Parsing: segment_person(image, output_mask_path)
+alt backend disponible
+  Parsing --> P: backend=mediapipe_selfie_segmentation
+else falla backend
+  Parsing --> P: backend=fallback_ellipse
+end
+P -> Align: compute_scale(landmarks, garment_type)
+Align --> P: scale
+P -> Contract: build_landmarks_contract()
+P -> Contract: build_transform_contract()
+Contract --> P: contratos v1.0
+P --> API: TryOnResult + meta (scale, segmentation, contracts)
+API --> UI: JSON respuesta
+
+== Evaluacion batch ==
+UI -> API: POST /fase2_1/tryon/batch
+API -> Batch: run_tryon_batch(...)
+loop por cada imagen
+  Batch -> P: run_tryon()
+  P --> Batch: resultado por imagen
+end
+Batch -> FS: escribe report.json (summary/results)
+Batch --> API: resumen batch
+API --> UI: estado + metricas auto
+
+== Evaluacion manual y consolidado ==
+Usuario -> UI: Revisa outputs
+UI -> API: POST /fase2_1/tryon/evaluate
+API -> Review: append_manual_review(criteria_scores)
+Review -> FS: append manual_reviews.jsonl
+Review --> API: score manual
+API --> UI: evaluacion guardada
+
+UI -> API: GET /fase2_1/tryon/evaluate-summary?valid_score_threshold=...
+API -> Review: summarize_manual_reviews(...)
+Review --> API: avg_score + visually_valid_rate
+API --> UI: resumen manual
+
+UI -> API: GET /fase2_1/tryon/evaluate-consolidated
+API -> Review: build_consolidated_evaluation_report(...)
+Review -> FS: consolidated_report.json (opcional)
+Review --> API: manual_acceptance_passed (target >= 90%)
+API --> UI: resumen combinado
+
+== Scripts operativos ==
+Usuario -> Scripts: prepare_validation_dataset.py
+Scripts -> FS: validation_manifest.json (20-50 objetivo)
+
+Usuario -> Scripts: benchmark_latency.py
+Scripts -> Batch: run_tryon_batch(limit=N)
+Batch --> Scripts: latencias por imagen
+Scripts --> FS: benchmark summary (p50/p95/p99)
+
+Usuario -> Scripts: evaluate_batch.py
+Scripts -> Batch: run_tryon_batch(...)
+Scripts -> Review: summarize + consolidated
+Scripts -> FS: consolidated_report.json
+
+== API Fase 2.1 directa ==
+UI -> API21: /tryon/run | /tryon/batch | /tryon/evaluate*
+API21 -> P: mismo core pipeline/review
+API21 --> UI: contratos equivalentes
+
+@enduml

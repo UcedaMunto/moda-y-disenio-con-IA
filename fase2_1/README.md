@@ -64,6 +64,10 @@ Metrica de validez visual manual:
 - `visually_valid_rate` = casos con `score >= valid_score_threshold` sobre total manual.
 - Criterio de aceptacion Semana 4: `manual_visually_valid_rate >= 90.0`.
 
+Diagrama PUML completo del flujo trabajado:
+
+- `fase2_1/docs/proceso_completo_fase2_1.puml`
+
 ---
 
 ## Secuencia de trabajo del sistema (2.1)
@@ -152,7 +156,7 @@ sequenceDiagram
 
 Limites actuales del MVP 2.1:
 
-- `segment_person` usa contrato `stub` (sin mascara real de modelo entrenado).
+- `segment_person` usa `mediapipe_selfie_segmentation` y fallback `fallback_ellipse` si falla backend.
 - `run_tryon` mantiene salida placeholder (copia de imagen base) para validar contratos/API.
 - Fallback activo cuando DB no inicializa en startup: la API sigue operativa.
 
@@ -161,7 +165,7 @@ flowchart TD
    A[Request /tryon/run] --> B{Pose detectada?}
    B -- No --> E[Error controlado: No landmarks]
    B -- Si --> C{Segmentacion disponible?}
-   C -- No --> F[Usar segmentation stub]
+   C -- No --> F[Usar fallback_ellipse]
    C -- Si --> G[Usar mascara real]
    F --> H[Computar scale + contracts]
    G --> H
