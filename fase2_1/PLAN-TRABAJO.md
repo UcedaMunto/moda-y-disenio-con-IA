@@ -119,7 +119,7 @@ Criterios de aceptacion:
 1. [x] Agregar tests para core/tryon.
 2. [x] Versionar configuraciones de inferencia.
 3. [x] Añadir selector de categoria de prenda para ajustes por tipo.
-4. [ ] Definir formato canonico de landmarks y transforms.
+4. [x] Definir formato canonico de landmarks y transforms.
 
 ---
 

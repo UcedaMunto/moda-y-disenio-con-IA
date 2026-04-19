@@ -22,7 +22,12 @@ def test_fase2_1_tryon_run_ok(tmp_path: Path, monkeypatch) -> None:
             "status": "ok",
             "output_path": str(out),
             "scale": 1.23,
-            "meta": {"baseline": True, "garment_type": request.garment_type},
+            "meta": {
+                "baseline": True,
+                "garment_type": request.garment_type,
+                "landmarks_contract": {"version": "1.0", "points": {}},
+                "transform_contract": {"version": "1.0", "scale": 1.23},
+            },
         }
 
     monkeypatch.setattr(api_main, "_run_fase21_tryon", fake_run)
@@ -42,6 +47,8 @@ def test_fase2_1_tryon_run_ok(tmp_path: Path, monkeypatch) -> None:
     assert data["status"] == "ok"
     assert data["output_path"] == str(out)
     assert data["meta"]["garment_type"] == "shirt"
+    assert data["meta"]["landmarks_contract"]["version"] == "1.0"
+    assert data["meta"]["transform_contract"]["version"] == "1.0"
     assert out.exists()
 
 

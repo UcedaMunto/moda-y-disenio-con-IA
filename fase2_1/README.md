@@ -87,6 +87,26 @@ sequenceDiagram
     API-->>U: metricas consolidadas
 ```
 
+## Contrato canonico de landmarks y transforms
+
+El pipeline de `run` y `batch` devuelve en `meta` dos bloques versionados:
+
+- `landmarks_contract`: puntos clave en espacio normalizado (`image_normalized`).
+- `transform_contract`: parametros de transformacion de prenda (escala, rotacion, traslacion).
+
+Version actual: `1.0`.
+
+```mermaid
+flowchart TD
+   A[Pose Landmarks - Mediapipe] --> B[build_landmarks_contract v1.0]
+   C[Scale + Garment Type] --> D[build_transform_contract v1.0]
+   B --> E[TryOnResult.meta.landmarks_contract]
+   D --> F[TryOnResult.meta.transform_contract]
+   E --> G[API /fase2_1/tryon/run]
+   F --> G
+   G --> H[Batch Report + Evaluacion Consolidada]
+```
+
 ---
 
 ## Criterio técnico de esta fase

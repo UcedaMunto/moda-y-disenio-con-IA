@@ -51,6 +51,11 @@ Ejemplo payload batch:
 
 Categorias permitidas en `garment_type`: `shirt`, `skirt`, `pants`, `dress`, `other`.
 
+La respuesta de `tryon/run` incluye en `meta`:
+
+- `landmarks_contract` (versionado, espacio normalizado)
+- `transform_contract` (scale, rotation_deg, translation_norm, garment_type)
+
 Ejemplo payload evaluacion manual:
 
 ```json
