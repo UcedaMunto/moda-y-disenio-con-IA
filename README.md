@@ -31,6 +31,25 @@ Flujo principal:
 - Fase 2.2 try-on v2: fase2_2/core/tryon/*
 - UI: apps/api/ui/index.html y apps/api/ui/tryon.html
 
+## Nueva Linea: Fase 2.3 (SAM 3D Body)
+
+Objetivo inmediato de mejora del try-on:
+
+1. Tomar una foto de persona.
+2. Reconstruir una malla 3D humana con la pose de la foto usando `sam-3d-body/`.
+3. Convertir esa salida a un "maniqui posed" util para vestir la prenda diseñada.
+4. Usar ese maniqui en el pipeline de prenda (ajuste/proyeccion/render) para mejorar resultado frente a overlay 2D.
+
+Documentacion de esta linea:
+
+- [docs/fase2_3/PLAN-SAM3D-BODY.md](docs/fase2_3/PLAN-SAM3D-BODY.md)
+- [docs/fase2_3/INTEGRACION-SAM3D-BODY-AMD.md](docs/fase2_3/INTEGRACION-SAM3D-BODY-AMD.md)
+
+Scripts iniciales Fase 2.3:
+
+- `scripts/run_sam3d_body_smoke.py` (smoke demo)
+- `scripts/run_sam3d_body_single.py` (inferencia por imagen + export de malla)
+
 ## Ejecucion Local
 
 ### 1) Activar entorno
@@ -96,6 +115,13 @@ Base URL local: http://localhost:8000
 | POST | /fase2_1/tryon/evaluate | Guarda evaluacion manual por imagen |
 | GET | /fase2_1/tryon/evaluate-summary | Resume evaluaciones manuales |
 | GET | /fase2_1/tryon/evaluate-consolidated | Consolida batch + evaluacion manual |
+
+### Fase 2.3 Body Reconstruction
+
+| Metodo | Endpoint | Descripcion |
+|---|---|---|
+| GET | /fase2_3/body/preflight | Verifica entorno/config SAM 3D Body (root, checkpoints, script) |
+| POST | /fase2_3/body/reconstruct | Reconstruye cuerpo 3D desde foto (SAM 3D Body) y guarda artefactos |
 
 ### Looks y Prueba Virtual
 
@@ -186,6 +212,28 @@ Base URL local: http://localhost:8000
 }
 ```
 
+### POST /fase2_3/body/reconstruct
+
+```json
+{
+  "image_path": "fotos_personas/2f7b90fbaaa9476253d6d993e6ddf487.jpg",
+  "case_id": "case-fase2_3-0001",
+  "checkpoint_path": "sam-3d-body/checkpoints/sam-3d-body-dinov3/model.ckpt",
+  "mhr_path": "sam-3d-body/checkpoints/sam-3d-body-dinov3/assets/mhr_model.pt",
+  "sam3d_root": "sam-3d-body",
+  "sam3d_python_bin": "python",
+  "detector_name": "",
+  "bbox_thresh": 0.8,
+  "use_mask": false,
+  "export_glb": true,
+  "use_mock": false
+}
+```
+
+Notas:
+- `checkpoint_path` y `mhr_path` pueden omitirse si defines `SAM3D_CHECKPOINT_PATH` y `SAM3D_MHR_PATH` en entorno.
+- Usa `GET /fase2_3/body/preflight` para validar configuración antes de correr inferencia real.
+
 ## Storage y Rutas Estaticas
 
 - /artifacts -> carpeta data
@@ -226,6 +274,8 @@ Todos los archivos Markdown secundarios fueron movidos a la carpeta docs.
 - [docs/fase2_1/core/training/segmentation/README.md](docs/fase2_1/core/training/segmentation/README.md)
 - [docs/fase2_2/README.md](docs/fase2_2/README.md)
 - [docs/fase2_2/PLAN-TRABAJO.md](docs/fase2_2/PLAN-TRABAJO.md)
+- [docs/fase2_3/PLAN-SAM3D-BODY.md](docs/fase2_3/PLAN-SAM3D-BODY.md)
+- [docs/fase2_3/INTEGRACION-SAM3D-BODY-AMD.md](docs/fase2_3/INTEGRACION-SAM3D-BODY-AMD.md)
 # 🧵 Fabric2Mesh AI (Local + AMD + Docker Hybrid)
 
 Sistema de IA para generar texturas de telas desde pocas imágenes (2–10) y aplicarlas automáticamente a modelos 3D existentes.

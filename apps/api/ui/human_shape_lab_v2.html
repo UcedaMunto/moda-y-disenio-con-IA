@@ -1,0 +1,781 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Human Shape Lab</title>
+  <style>
+    :root {
+      --bg: #0b1117;
+      --surface: #121a23;
+      --surface-2: #182431;
+      --ink: #ebf2f8;
+      --muted: #8ca0b3;
+      --accent: #5fd6ff;
+      --ok: #57c785;
+      --warn: #f0b45c;
+      --err: #f06d6d;
+      --border: #233344;
+      --radius: 10px;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, sans-serif; background: var(--bg); color: var(--ink); height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+    header { display:flex; justify-content:space-between; align-items:center; padding:10px 18px; border-bottom:1px solid var(--border); background:var(--surface); flex-shrink:0; }
+    header h1 { margin:0; font-size:1rem; color:var(--accent); }
+    header a { color:var(--muted); text-decoration:none; font-size:0.85rem; }
+    header a:hover { color:var(--accent); }
+    .layout { display:grid; grid-template-columns: 260px 1fr 280px; flex:1; min-height:0; overflow:hidden; }
+    aside { border-right:1px solid var(--border); background:var(--surface); overflow-y:auto; display:flex; flex-direction:column; }
+    main { overflow:auto; display:flex; flex-direction:column; align-items:center; padding:12px; gap:10px; background:var(--bg); }
+    .right-panel { border-left:1px solid var(--border); background:var(--surface); overflow-y:auto; display:flex; flex-direction:column; padding:12px; gap:10px; }
+    .card { background:var(--surface-2); border:1px solid var(--border); border-radius:var(--radius); padding:10px; }
+    .section-title { font-size:0.7rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.08em; margin-bottom:8px; }
+    .btn { background:var(--surface-2); color:var(--ink); border:1px solid var(--border); border-radius:8px; padding:6px 10px; cursor:pointer; font-size:0.82rem; transition: border-color 0.15s; }
+    .btn:hover:not(:disabled) { border-color: var(--accent); }
+    .btn.primary { background:var(--accent); color:#071019; border-color:var(--accent); font-weight:700; }
+    .btn.ok-btn { border-color:var(--ok); color:var(--ok); }
+    .btn.ok-btn.active { background:var(--ok); color:#071019; }
+    .btn.warn-btn { border-color:var(--warn); color:var(--warn); }
+    .btn.err-btn { border-color:var(--err); color:var(--err); }
+    .btn.err-btn.active { background:var(--err); color:#fff; }
+    .btn:disabled { opacity:0.4; cursor:not-allowed; }
+    .toolbar { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+    .status-bar { padding:6px 10px; font-size:0.83rem; background:var(--surface); border-bottom:1px solid var(--border); color:var(--muted); min-height:30px; flex-shrink:0; }
+    .sample-list { display:flex; flex-direction:column; gap:6px; padding:10px; flex:1; overflow-y:auto; }
+    .sample-item { border:1px solid var(--border); border-radius:8px; padding:8px; cursor:pointer; background:var(--bg); font-size:0.8rem; }
+    .sample-item:hover { border-color:var(--muted); }
+    .sample-item.selected { border-color:var(--accent); background:var(--surface-2); }
+    .sample-item .name { font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .sample-item .meta { font-size:0.7rem; color:var(--muted); margin-top:2px; }
+    .badge { display:inline-block; font-size:0.65rem; padding:1px 5px; border-radius:999px; border:1px solid; margin-left:4px; vertical-align:middle; }
+    .badge.ok { color:var(--ok); border-color:var(--ok); }
+    .badge.warn { color:var(--warn); border-color:var(--warn); }
+    .badge.info { color:var(--accent); border-color:var(--accent); }
+    /* Canvas container */
+    .canvas-container { position:relative; display:inline-block; cursor:crosshair; }
+    canvas#mainCanvas { display:block; border:1px solid var(--border); border-radius:8px; }
+    /* Body part list */
+    .part-list { display:flex; flex-direction:column; gap:4px; }
+    .part-row { display:grid; grid-template-columns:12px 1fr auto auto; gap:6px; align-items:center; padding:4px 6px; border-radius:6px; cursor:pointer; border:1px solid transparent; font-size:0.78rem; }
+    .part-row:hover { background:var(--surface); }
+    .part-row.selected { background:var(--surface); border-color:var(--accent); }
+    .part-row.accepted { border-color:var(--ok); }
+    .part-row.rejected { border-color:var(--err); }
+    .part-dot { width:10px; height:10px; border-radius:50%; flex-shrink:0; }
+    .part-label { font-weight:500; }
+    .part-status { font-size:0.68rem; color:var(--muted); }
+    .divider { border:0; border-top:1px solid var(--border); margin:8px 0; }
+    select { background:var(--surface-2); color:var(--ink); border:1px solid var(--border); border-radius:6px; padding:5px 8px; font-size:0.82rem; width:100%; }
+    .info-text { font-size:0.78rem; color:var(--muted); line-height:1.5; }
+    .mode-indicator { display:inline-block; padding:2px 8px; border-radius:6px; font-size:0.75rem; border:1px solid var(--muted); color:var(--muted); }
+    .mode-indicator.sketch { border-color:var(--accent); color:var(--accent); }
+    .mode-indicator.review { border-color:var(--warn); color:var(--warn); }
+    #importPanel { padding:10px; border-bottom:1px solid var(--border); }
+    .stat-row { display:flex; justify-content:space-between; font-size:0.78rem; color:var(--muted); padding:2px 0; }
+    .stat-row strong { color:var(--ink); }
+    .hidden { display:none !important; }
+  </style>
+</head>
+<body>
+<header>
+  <h1>Human Shape Lab <span class="mode-indicator" id="modeIndicator">—</span></h1>
+  <div style="display:flex;gap:14px;align-items:center;">
+    <a href="/tryon">Try-On</a>
+    <a href="/">Editor</a>
+  </div>
+</header>
+
+<div class="status-bar" id="statusBar">Iniciando...</div>
+
+<div class="layout">
+  <!-- LEFT: sample list -->
+  <aside>
+    <div id="importPanel">
+      <div class="section-title">Dataset</div>
+      <div class="toolbar" style="margin-bottom:8px;">
+        <button class="btn primary" id="btnImport">Importar fotos</button>
+        <button class="btn" id="btnReload">↺</button>
+      </div>
+      <div id="statsPanel"></div>
+    </div>
+    <div class="sample-list" id="sampleList">
+      <div class="info-text">Sin muestras todavía.</div>
+    </div>
+  </aside>
+
+  <!-- CENTER: canvas -->
+  <main id="mainArea">
+    <div class="card" style="width:100%;max-width:760px;">
+      <div class="toolbar">
+        <button class="btn" id="btnModeSketch" title="Modo anotación: mueve los puntos del esqueleto">✏️ Anotar</button>
+        <button class="btn" id="btnModeReview" title="Modo revisión: acepta/rechaza partes">🔍 Revisar</button>
+        <span style="flex:1;"></span>
+        <button class="btn" id="btnLoadAuto" disabled>⟳ Cargar estimación automática</button>
+        <button class="btn primary" id="btnSaveKp" disabled>💾 Guardar</button>
+      </div>
+    </div>
+
+    <div class="canvas-container" id="canvasWrap">
+      <canvas id="mainCanvas"></canvas>
+    </div>
+
+    <div class="card" style="width:100%;max-width:760px;" id="reviewActions">
+      <div class="section-title">Revisión de partes (modo revisar)</div>
+      <div class="toolbar" id="reviewBtns"></div>
+    </div>
+  </main>
+
+  <!-- RIGHT: parts list + training -->
+  <div class="right-panel">
+    <div class="card">
+      <div class="section-title">Partes del cuerpo</div>
+      <div class="info-text" style="margin-bottom:6px;">Haz clic en una parte para seleccionarla y arrastrar sus extremos en el canvas.</div>
+      <div class="part-list" id="partList"></div>
+    </div>
+
+    <div class="card">
+      <div class="section-title">Punto seleccionado</div>
+      <div id="kpInfo" class="info-text">Ninguno.</div>
+    </div>
+
+    <div class="card">
+      <div class="section-title">Entrenamiento</div>
+      <div class="toolbar" style="flex-direction:column; align-items:stretch; gap:6px;">
+        <button class="btn warn-btn" id="btnRefreshAuto" disabled>Regenerar auto-estimación</button>
+        <button class="btn primary" id="btnTrain" disabled>Entrenar modelo</button>
+      </div>
+      <div id="trainingInfo" class="info-text" style="margin-top:8px;">Sin entrenar.</div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+// ============================================================
+// Constants
+// ============================================================
+const MAX_DISPLAY_HEIGHT = 800;   // max canvas display height in px
+const KP_RADIUS = 9;              // keypoint handle radius px (on canvas)
+const KP_HIT = 14;                // keypoint click/drag hit radius px
+
+const PARTS_META = null; // loaded from API
+
+// ============================================================
+// State
+// ============================================================
+const state = {
+  mode: 'sketch',          // 'sketch' | 'review'
+  samples: [],
+  selectedSample: null,
+  parts: [],               // BODY_PARTS_SEGMENTS from API
+  kpNames: [],
+  kp: {},                  // {name: {x,y,visible,optional}} - normalized 0-1
+  kpSaved: {},             // last saved version
+  acceptedParts: new Set(),
+  rejectedParts: new Set(),
+  selectedPart: null,      // part id
+  dragKp: null,            // keypoint name being dragged
+  photo: null,             // HTMLImageElement
+  photoNativeW: 1,
+  photoNativeH: 1,
+  displayScale: 1,         // photo display scale (canvas CSS vs native)
+  dirty: false,
+};
+
+// ============================================================
+// DOM
+// ============================================================
+const canvas = document.getElementById('mainCanvas');
+const ctx = canvas.getContext('2d');
+
+function setStatus(msg, color = 'var(--muted)') {
+  const el = document.getElementById('statusBar');
+  el.textContent = msg;
+  el.style.color = color;
+}
+
+function escHtml(s) {
+  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ============================================================
+// API helpers
+// ============================================================
+async function api(path, method = 'GET', body = null) {
+  const opts = { method, headers: {} };
+  if (body !== null) {
+    opts.headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(body);
+  }
+  const resp = await fetch(path, opts);
+  const text = await resp.text();
+  let data = {};
+  try { data = text ? JSON.parse(text) : {}; } catch { data = { detail: text || 'API error' }; }
+  if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
+  return data;
+}
+
+// ============================================================
+// Init
+// ============================================================
+async function init() {
+  try {
+    const [partsResp, statusResp] = await Promise.all([
+      api('/human-shape-lab/parts'),
+      api('/human-shape-lab/status'),
+    ]);
+    state.parts = partsResp.parts || [];
+    state.kpNames = partsResp.keypoint_names || [];
+    applyStatus(statusResp);
+    renderPartList();
+    renderModeUI();
+    setStatus('Listo. Importa fotos o selecciona una muestra.', 'var(--ok)');
+  } catch (e) {
+    setStatus(`Error al inicializar: ${e.message}`, 'var(--err)');
+  }
+}
+
+function applyStatus(data) {
+  state.samples = data.samples || [];
+  renderSampleList();
+  const lab = data.lab || {};
+  document.getElementById('statsPanel').innerHTML = `
+    <div class="stat-row"><span>Fotos disponibles</span><strong>${data.source?.available_photos_total ?? 0}</strong></div>
+    <div class="stat-row"><span>Muestras</span><strong>${lab.samples_total ?? 0}</strong></div>
+    <div class="stat-row"><span>Corregidas</span><strong>${lab.corrected_total ?? 0}</strong></div>
+    <div class="stat-row"><span>Modelo</span><strong>${escHtml(lab.model_config_path ? '✓ entrenado' : 'sin entrenar')}</strong></div>
+  `;
+  const hasSamples = (lab.samples_total ?? 0) > 0;
+  document.getElementById('btnTrain').disabled = !hasSamples;
+}
+
+// ============================================================
+// Sample list
+// ============================================================
+function renderSampleList() {
+  const list = document.getElementById('sampleList');
+  if (!state.samples.length) {
+    list.innerHTML = '<div class="info-text">Sin muestras. Usa "Importar fotos".</div>';
+    return;
+  }
+  list.innerHTML = state.samples.map(s => {
+    const sel = state.selectedSample?.sample_id === s.sample_id ? ' selected' : '';
+    const badge = s.is_corrected
+      ? '<span class="badge ok">corregida</span>'
+      : '<span class="badge warn">auto</span>';
+    const kpBadge = s.has_keypoints
+      ? '<span class="badge info">kp</span>'
+      : '';
+    return `<div class="sample-item${sel}" data-id="${escHtml(s.sample_id)}">
+      <div class="name">${escHtml(s.image_name)}${badge}${kpBadge}</div>
+      <div class="meta">${escHtml(s.sample_id.slice(0,16))}...</div>
+    </div>`;
+  }).join('');
+  list.querySelectorAll('.sample-item').forEach(el =>
+    el.addEventListener('click', () => loadSample(el.dataset.id))
+  );
+}
+
+// ============================================================
+// Load sample
+// ============================================================
+async function loadSample(sampleId) {
+  const sample = state.samples.find(s => s.sample_id === sampleId);
+  if (!sample) return;
+  state.selectedSample = sample;
+  renderSampleList();
+  setStatus(`Cargando ${sample.image_name}...`);
+
+  try {
+    const [kpResp, img] = await Promise.all([
+      api(`/human-shape-lab/samples/${sampleId}/keypoints`),
+      loadImg(`${sample.image_url}?t=${Date.now()}`),
+    ]);
+
+    state.photo = img;
+    state.photoNativeW = img.naturalWidth;
+    state.photoNativeH = img.naturalHeight;
+    state.kp = deepCopy(kpResp.keypoints || {});
+    state.kpSaved = deepCopy(state.kp);
+    state.acceptedParts = new Set(sample.accepted_parts || []);
+    state.rejectedParts = new Set(sample.rejected_parts || []);
+    state.dirty = false;
+
+    resizeCanvas();
+    redraw();
+    renderPartList();
+    updateButtonStates();
+    setStatus(`${sample.image_name} — fuente: ${kpResp.source}`, 'var(--ok)');
+  } catch (e) {
+    setStatus(`Error al cargar muestra: ${e.message}`, 'var(--err)');
+  }
+}
+
+function loadImg(url) {
+  return new Promise((res, rej) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => res(img);
+    img.onerror = () => rej(new Error(`No se pudo cargar: ${url}`));
+    img.src = url;
+  });
+}
+
+function deepCopy(o) { return JSON.parse(JSON.stringify(o)); }
+
+// ============================================================
+// Canvas resize and coordinate helpers
+// ============================================================
+function resizeCanvas() {
+  if (!state.photo) return;
+  const nw = state.photoNativeW, nh = state.photoNativeH;
+  // Scale so height ≤ MAX_DISPLAY_HEIGHT and width ≤ container width
+  const wrap = document.getElementById('canvasWrap');
+  const maxW = Math.min(wrap.parentElement.clientWidth - 24, 720);
+  const scaleH = MAX_DISPLAY_HEIGHT / nh;
+  const scaleW = maxW / nw;
+  const scale = Math.min(scaleH, scaleW, 1); // never upscale
+  const dw = Math.round(nw * scale);
+  const dh = Math.round(nh * scale);
+  state.displayScale = scale;
+  canvas.width = dw;
+  canvas.height = dh;
+  canvas.style.width = dw + 'px';
+  canvas.style.height = dh + 'px';
+}
+
+/** Normalized (0-1) → canvas pixel coords */
+function normToCanvas(nx, ny) {
+  return { x: nx * canvas.width, y: ny * canvas.height };
+}
+
+/** Canvas pixel → normalized (0-1) */
+function canvasToNorm(px, py) {
+  return { x: px / canvas.width, y: py / canvas.height };
+}
+
+function pointerOnCanvas(evt) {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  return {
+    x: (evt.clientX - rect.left) * scaleX,
+    y: (evt.clientY - rect.top) * scaleY,
+  };
+}
+
+// ============================================================
+// Draw
+// ============================================================
+function partColor(partId) {
+  return state.parts.find(p => p.id === partId)?.color || '#aaa';
+}
+
+function redraw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (!state.photo) return;
+  ctx.drawImage(state.photo, 0, 0, canvas.width, canvas.height);
+
+  if (!Object.keys(state.kp).length) return;
+
+  // Draw segments
+  for (const part of state.parts) {
+    const a = state.kp[part.kp_a];
+    const b = state.kp[part.kp_b];
+    if (!a || !b) continue;
+    if (!a.visible || !b.visible) continue;
+
+    const ca = normToCanvas(a.x, a.y);
+    const cb = normToCanvas(b.x, b.y);
+
+    const isSelected = state.selectedPart === part.id;
+    const isAccepted = state.acceptedParts.has(part.id);
+    const isRejected = state.rejectedParts.has(part.id);
+
+    let strokeColor = part.color;
+    let lineWidth = 3;
+    let alpha = 0.75;
+
+    if (isSelected) { lineWidth = 5; alpha = 1.0; }
+    if (isAccepted) { strokeColor = '#57c785'; alpha = 0.9; }
+    if (isRejected) { strokeColor = '#f06d6d'; alpha = 0.9; lineWidth = 4; }
+
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = strokeColor;
+    ctx.lineWidth = lineWidth;
+    ctx.lineCap = 'round';
+    ctx.shadowColor = '#000';
+    ctx.shadowBlur = 4;
+    ctx.beginPath();
+    ctx.moveTo(ca.x, ca.y);
+    ctx.lineTo(cb.x, cb.y);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // Draw keypoints
+  const renderedKp = new Set();
+  for (const part of state.parts) {
+    for (const kpName of [part.kp_a, part.kp_b]) {
+      if (renderedKp.has(kpName)) continue;
+      renderedKp.add(kpName);
+      const kp = state.kp[kpName];
+      if (!kp) continue;
+      const cp = normToCanvas(kp.x, kp.y);
+      const isDragging = state.dragKp === kpName;
+      const isPartKp = state.selectedPart &&
+        state.parts.find(p => p.id === state.selectedPart &&
+          (p.kp_a === kpName || p.kp_b === kpName));
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(cp.x, cp.y, isDragging ? KP_RADIUS + 3 : KP_RADIUS, 0, Math.PI * 2);
+      ctx.fillStyle = isPartKp ? '#fff' : (kp.optional ? '#555' : '#222');
+      ctx.strokeStyle = isPartKp ? '#fff' : partColor(
+        state.parts.find(p => p.kp_a === kpName || p.kp_b === kpName)?.id || '__'
+      );
+      ctx.lineWidth = 2;
+      ctx.shadowColor = '#000';
+      ctx.shadowBlur = 6;
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+
+      // Label on hover / selected
+      if (isPartKp || isDragging) {
+        ctx.save();
+        ctx.font = '11px system-ui';
+        ctx.fillStyle = '#fff';
+        ctx.shadowColor = '#000';
+        ctx.shadowBlur = 4;
+        ctx.fillText(kpName.replace(/_/g, ' '), cp.x + KP_RADIUS + 3, cp.y + 4);
+        ctx.restore();
+      }
+    }
+  }
+}
+
+// ============================================================
+// Part list render
+// ============================================================
+function renderPartList() {
+  const list = document.getElementById('partList');
+  list.innerHTML = state.parts.map(p => {
+    const sel = state.selectedPart === p.id ? ' selected' : '';
+    const acc = state.acceptedParts.has(p.id) ? ' accepted' : '';
+    const rej = state.rejectedParts.has(p.id) ? ' rejected' : '';
+    const optTag = p.optional ? '<span class="badge warn">opt</span>' : '';
+    let statusIcon = '';
+    if (state.mode === 'review') {
+      if (state.acceptedParts.has(p.id)) statusIcon = '✓';
+      else if (state.rejectedParts.has(p.id)) statusIcon = '✗';
+    }
+    return `<div class="part-row${sel}${acc}${rej}" data-part="${escHtml(p.id)}">
+      <div class="part-dot" style="background:${escHtml(p.color)}"></div>
+      <span class="part-label">${escHtml(p.label)}${optTag}</span>
+      <span class="part-status">${statusIcon}</span>
+    </div>`;
+  }).join('');
+  list.querySelectorAll('.part-row').forEach(el =>
+    el.addEventListener('click', () => selectPart(el.dataset.part))
+  );
+}
+
+function selectPart(partId) {
+  if (state.mode === 'review') {
+    toggleReviewPart(partId);
+    return;
+  }
+  state.selectedPart = state.selectedPart === partId ? null : partId;
+  renderPartList();
+  redraw();
+  updateKpInfo();
+}
+
+// ============================================================
+// Review mode
+// ============================================================
+function toggleReviewPart(partId) {
+  if (state.acceptedParts.has(partId)) {
+    state.acceptedParts.delete(partId);
+    state.rejectedParts.add(partId);
+  } else if (state.rejectedParts.has(partId)) {
+    state.rejectedParts.delete(partId);
+  } else {
+    state.acceptedParts.add(partId);
+  }
+  state.dirty = true;
+  renderPartList();
+  redraw();
+  renderReviewButtons();
+}
+
+function renderReviewButtons() {
+  const btns = document.getElementById('reviewBtns');
+  if (state.mode !== 'review') { btns.innerHTML = ''; return; }
+  btns.innerHTML = `
+    <button class="btn ok-btn" id="btnAcceptAll">Aceptar todas</button>
+    <button class="btn err-btn" id="btnClearReview">Limpiar revisión</button>
+    <span class="info-text" style="font-size:0.75rem;">O haz clic en cada parte de la lista para ciclar: aceptar → rechazar → neutro</span>
+  `;
+  document.getElementById('btnAcceptAll').addEventListener('click', () => {
+    state.parts.forEach(p => state.acceptedParts.add(p.id));
+    state.rejectedParts.clear();
+    state.dirty = true;
+    renderPartList();
+    redraw();
+  });
+  document.getElementById('btnClearReview').addEventListener('click', () => {
+    state.acceptedParts.clear();
+    state.rejectedParts.clear();
+    state.dirty = true;
+    renderPartList();
+    redraw();
+  });
+}
+
+// ============================================================
+// Mode switching
+// ============================================================
+function renderModeUI() {
+  const ind = document.getElementById('modeIndicator');
+  const reviewActions = document.getElementById('reviewActions');
+  if (state.mode === 'sketch') {
+    ind.textContent = 'Anotar';
+    ind.className = 'mode-indicator sketch';
+    reviewActions.classList.add('hidden');
+    document.getElementById('btnModeSketch').style.borderColor = 'var(--accent)';
+    document.getElementById('btnModeReview').style.borderColor = '';
+  } else {
+    ind.textContent = 'Revisar';
+    ind.className = 'mode-indicator review';
+    reviewActions.classList.remove('hidden');
+    document.getElementById('btnModeSketch').style.borderColor = '';
+    document.getElementById('btnModeReview').style.borderColor = 'var(--warn)';
+    renderReviewButtons();
+  }
+  renderPartList();
+  redraw();
+}
+
+// ============================================================
+// Canvas interaction
+// ============================================================
+function findKpUnderPointer(px, py) {
+  // If a part is selected, only check its 2 keypoints first
+  const checkFirst = state.selectedPart
+    ? state.parts.find(p => p.id === state.selectedPart)
+    : null;
+  const ordered = checkFirst
+    ? [checkFirst.kp_a, checkFirst.kp_b, ...state.kpNames.filter(n => n !== checkFirst.kp_a && n !== checkFirst.kp_b)]
+    : state.kpNames;
+
+  for (const name of ordered) {
+    const kp = state.kp[name];
+    if (!kp) continue;
+    const cp = normToCanvas(kp.x, kp.y);
+    const dx = cp.x - px, dy = cp.y - py;
+    if (Math.sqrt(dx*dx + dy*dy) <= KP_HIT) return name;
+  }
+  return null;
+}
+
+canvas.addEventListener('pointerdown', e => {
+  if (!state.photo || state.mode === 'review') return;
+  const { x, y } = pointerOnCanvas(e);
+  const hit = findKpUnderPointer(x, y);
+  if (hit) {
+    state.dragKp = hit;
+    canvas.setPointerCapture(e.pointerId);
+    updateKpInfo(hit);
+    redraw();
+  }
+});
+
+canvas.addEventListener('pointermove', e => {
+  if (!state.dragKp) return;
+  const { x, y } = pointerOnCanvas(e);
+  const norm = canvasToNorm(
+    Math.max(0, Math.min(canvas.width, x)),
+    Math.max(0, Math.min(canvas.height, y))
+  );
+  state.kp[state.dragKp].x = +norm.x.toFixed(4);
+  state.kp[state.dragKp].y = +norm.y.toFixed(4);
+  state.dirty = true;
+  redraw();
+  updateKpInfo(state.dragKp);
+});
+
+canvas.addEventListener('pointerup', () => {
+  state.dragKp = null;
+  updateButtonStates();
+});
+
+canvas.addEventListener('click', e => {
+  if (state.mode !== 'sketch' || !state.photo) return;
+  const { x, y } = pointerOnCanvas(e);
+  const hit = findKpUnderPointer(x, y);
+  if (!hit) return;
+  // Find which part this kp belongs to and select it
+  const part = state.parts.find(p => p.kp_a === hit || p.kp_b === hit);
+  if (part) {
+    state.selectedPart = part.id;
+    renderPartList();
+    redraw();
+  }
+});
+
+// ============================================================
+// Keypoint info panel
+// ============================================================
+function updateKpInfo(kpName = null) {
+  const el = document.getElementById('kpInfo');
+  if (!kpName) {
+    el.textContent = 'Arrastra un punto del esqueleto para moverlo.';
+    return;
+  }
+  const kp = state.kp[kpName];
+  if (!kp) { el.textContent = 'Punto no disponible.'; return; }
+  el.innerHTML = `<strong>${escHtml(kpName.replace(/_/g,' '))}</strong><br/>
+    x: ${kp.x.toFixed(3)} &nbsp; y: ${kp.y.toFixed(3)}<br/>
+    ${kp.optional ? '<em>Opcional</em>' : ''} ${kp.visible ? '' : '<em>Oculto</em>'}`;
+}
+
+// ============================================================
+// Save
+// ============================================================
+async function saveKeypoints() {
+  if (!state.selectedSample) return;
+  setStatus('Guardando keypoints...');
+  try {
+    await api(`/human-shape-lab/samples/${state.selectedSample.sample_id}/keypoints`, 'POST', {
+      keypoints: state.kp,
+      accepted_parts: [...state.acceptedParts],
+      rejected_parts: [...state.rejectedParts],
+    });
+    state.kpSaved = deepCopy(state.kp);
+    state.dirty = false;
+    // Refresh list
+    const statusResp = await api('/human-shape-lab/status');
+    applyStatus(statusResp);
+    updateButtonStates();
+    setStatus('Guardado ✓', 'var(--ok)');
+  } catch (e) {
+    setStatus(`Error al guardar: ${e.message}`, 'var(--err)');
+  }
+}
+
+// ============================================================
+// Load auto estimation
+// ============================================================
+async function loadAutoEstimate() {
+  if (!state.selectedSample) return;
+  setStatus('Cargando estimación automática...');
+  try {
+    const kpResp = await api(`/human-shape-lab/samples/${state.selectedSample.sample_id}/keypoints?force_auto=1`);
+    // Note: backend always returns geometric/mediapipe if no saved version, but we pass force to re-estimate
+    state.kp = deepCopy(kpResp.keypoints || {});
+    state.dirty = true;
+    redraw();
+    updateButtonStates();
+    setStatus(`Estimación cargada (${kpResp.source})`, 'var(--warn)');
+  } catch (e) {
+    setStatus(`Error: ${e.message}`, 'var(--err)');
+  }
+}
+
+// ============================================================
+// Training
+// ============================================================
+async function trainModel() {
+  setStatus('Entrenando modelo ligero...');
+  try {
+    const data = await api('/human-shape-lab/train', 'POST', { min_iou: 0.05 });
+    const t = data.training || {};
+    document.getElementById('trainingInfo').innerHTML = `
+      Modelo: <span style="font-family:monospace;font-size:0.75rem">${escHtml(t.output_config_path || '')}</span><br/>
+      Threshold: <strong>${escHtml(String(t.best_threshold ?? 'n/a'))}</strong><br/>
+      Val IoU: <strong>${escHtml(String(t.val_iou ?? 'n/a'))}</strong>
+    `;
+    const sr = await api('/human-shape-lab/status');
+    applyStatus(sr);
+    setStatus('Entrenamiento completado ✓', 'var(--ok)');
+  } catch (e) {
+    setStatus(`Error de entrenamiento: ${e.message}`, 'var(--err)');
+  }
+}
+
+async function refreshAutoMask() {
+  if (!state.selectedSample) return;
+  setStatus('Regenerando estimación...');
+  try {
+    await api(`/human-shape-lab/samples/${state.selectedSample.sample_id}/refresh-auto-mask`, 'POST', {});
+    // Reload keypoints fresh
+    const kpResp = await api(`/human-shape-lab/samples/${state.selectedSample.sample_id}/keypoints`);
+    state.kp = deepCopy(kpResp.keypoints || {});
+    state.dirty = true;
+    redraw();
+    setStatus('Estimación regenerada ✓', 'var(--ok)');
+  } catch (e) {
+    setStatus(`Error: ${e.message}`, 'var(--err)');
+  }
+}
+
+// ============================================================
+// Button states
+// ============================================================
+function updateButtonStates() {
+  const hasSample = !!state.selectedSample;
+  document.getElementById('btnSaveKp').disabled = !hasSample || !state.dirty;
+  document.getElementById('btnLoadAuto').disabled = !hasSample;
+  document.getElementById('btnRefreshAuto').disabled = !hasSample;
+}
+
+// ============================================================
+// Import
+// ============================================================
+async function importAllPhotos() {
+  setStatus('Importando fotos...');
+  try {
+    const data = await api('/human-shape-lab/bootstrap', 'POST', {});
+    const sr = await api('/human-shape-lab/status');
+    applyStatus(sr);
+    setStatus(`Importación completa: ${data.imported_total} foto(s)`, 'var(--ok)');
+  } catch (e) {
+    setStatus(`Error al importar: ${e.message}`, 'var(--err)');
+  }
+}
+
+// ============================================================
+// Event wiring
+// ============================================================
+document.getElementById('btnImport').addEventListener('click', importAllPhotos);
+document.getElementById('btnReload').addEventListener('click', async () => {
+  const sr = await api('/human-shape-lab/status');
+  applyStatus(sr);
+});
+document.getElementById('btnModeSketch').addEventListener('click', () => {
+  state.mode = 'sketch';
+  renderModeUI();
+});
+document.getElementById('btnModeReview').addEventListener('click', () => {
+  state.mode = 'review';
+  renderModeUI();
+});
+document.getElementById('btnSaveKp').addEventListener('click', saveKeypoints);
+document.getElementById('btnLoadAuto').addEventListener('click', loadAutoEstimate);
+document.getElementById('btnTrain').addEventListener('click', trainModel);
+document.getElementById('btnRefreshAuto').addEventListener('click', refreshAutoMask);
+
+window.addEventListener('resize', () => {
+  if (state.photo) { resizeCanvas(); redraw(); }
+});
+
+// ============================================================
+// Boot
+// ============================================================
+await init();
+updateButtonStates();
+</script>
+</body>
+</html>

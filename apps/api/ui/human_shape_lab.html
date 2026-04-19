@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Human Shape Lab</title>
+  <style>
+    :root {
+      --bg: #0b1117;
+      --surface: #121a23;
+      --surface-2: #182431;
+      --ink: #ebf2f8;
+      --muted: #8ca0b3;
+      --accent: #5fd6ff;
+      --ok: #57c785;
+      --warn: #f0b45c;
+      --err: #f06d6d;
+      --border: #233344;
+      --radius: 10px;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, sans-serif; background: var(--bg); color: var(--ink); }
+    header { display:flex; justify-content:space-between; align-items:center; padding:14px 18px; border-bottom:1px solid var(--border); background:var(--surface); }
+    header h1 { margin:0; font-size:1rem; color:var(--accent); }
+    header a { color:var(--muted); text-decoration:none; }
+    .layout { display:grid; grid-template-columns: 320px 1fr; min-height: calc(100vh - 58px); }
+    aside { padding:16px; border-right:1px solid var(--border); background:var(--surface); overflow:auto; }
+    main { padding:16px; display:flex; flex-direction:column; gap:12px; overflow:auto; }
+    .card { background:var(--surface-2); border:1px solid var(--border); border-radius:var(--radius); padding:12px; }
+    .section-title { font-size:0.72rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.08em; margin-bottom:10px; }
+    .btn { background:var(--surface-2); color:var(--ink); border:1px solid var(--border); border-radius:8px; padding:8px 12px; cursor:pointer; }
+    .btn:hover { border-color: var(--accent); }
+    .btn.primary { background:var(--accent); color:#071019; border-color:var(--accent); font-weight:700; }
+    .btn.warn { border-color:var(--warn); }
+    .btn:disabled { opacity:0.45; cursor:not-allowed; }
+    .toolbar, .metrics { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+    .status { min-height:20px; color:var(--muted); font-size:0.88rem; }
+    .sample-list { display:flex; flex-direction:column; gap:8px; max-height:60vh; overflow:auto; }
+    .sample-item { border:1px solid var(--border); border-radius:8px; padding:10px; cursor:pointer; background:var(--surface-2); }
+    .sample-item.selected { border-color:var(--accent); }
+    .sample-item .name { font-size:0.85rem; font-weight:600; }
+    .sample-item .meta { font-size:0.73rem; color:var(--muted); margin-top:4px; }
+    .badge { display:inline-block; font-size:0.68rem; padding:2px 6px; border-radius:999px; border:1px solid var(--border); margin-left:6px; }
+    .badge.ok { color:var(--ok); border-color:var(--ok); }
+    .badge.warn { color:var(--warn); border-color:var(--warn); }
+    .workspace { display:grid; grid-template-columns: 1fr 360px; gap:12px; }
+    .canvas-wrap { display:flex; flex-direction:column; gap:8px; }
+    canvas { width:100%; max-width:100%; background:#0a0f14; border:1px solid var(--border); border-radius:8px; touch-action:none; }
+    .panel-text { font-size:0.82rem; color:var(--muted); line-height:1.5; }
+    .field { display:flex; flex-direction:column; gap:6px; margin-bottom:10px; }
+    .field input { background:#0d141c; color:var(--ink); border:1px solid var(--border); border-radius:8px; padding:8px 10px; }
+    .mono { font-family: ui-monospace, monospace; word-break: break-all; }
+    .hidden { display:none !important; }
+    @media (max-width: 1100px) {
+      .layout { grid-template-columns: 1fr; }
+      aside { border-right:none; border-bottom:1px solid var(--border); }
+      .workspace { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Human Shape Lab</h1>
+    <div>
+      <a href="/tryon">Ir a Try-On</a>
+      <span style="color:var(--muted);padding:0 8px;">|</span>
+      <a href="/">Volver al editor</a>
+    </div>
+  </header>
+  <div class="layout">
+    <aside>
+      <div class="card">
+        <div class="section-title">Necesitamos</div>
+        <div class="panel-text">
+          1. Un lote inicial de 20 fotos en <span class="mono">fotos_personas/</span>.<br/>
+          2. Corregir la silueta humana sobre cada imagen.<br/>
+          3. Reentrenar el segmentador ligero con esas correcciones.<br/>
+          4. Repetir el ciclo hasta mejorar la figura del maniquí.
+        </div>
+      </div>
+      <div class="card" style="margin-top:12px;">
+        <div class="section-title">Dataset</div>
+        <div class="toolbar" style="margin-bottom:8px;">
+          <button class="btn primary" id="btnImportAll">Importar fotos</button>
+          <button class="btn" id="btnReload">Recargar</button>
+        </div>
+        <div class="panel-text" id="dataset-summary">Cargando estado...</div>
+      </div>
+      <div class="card" style="margin-top:12px;">
+        <div class="section-title">Muestras</div>
+        <div class="sample-list" id="sampleList"></div>
+      </div>
+    </aside>
+    <main>
+      <div class="card">
+        <div class="toolbar">
+          <div class="status" id="statusBar">Carga el dataset o selecciona una muestra para corregir.</div>
+        </div>
+      </div>
+      <div class="workspace">
+        <div class="card canvas-wrap">
+          <div class="section-title">Corrección de figura</div>
+          <div class="toolbar">
+            <button class="btn" id="modePaint">Pintar</button>
+            <button class="btn" id="modeErase">Borrar</button>
+            <label class="panel-text">Pincel <input id="brushSize" type="range" min="4" max="64" value="18" /></label>
+            <button class="btn" id="btnResetToAuto">Restaurar auto</button>
+            <button class="btn primary" id="btnSaveMask">Guardar corrección</button>
+          </div>
+          <canvas id="editorCanvas" width="768" height="1024"></canvas>
+          <div class="panel-text">Arrastra sobre la imagen para añadir o quitar máscara. La máscara actual se pinta en cian sobre la persona.</div>
+        </div>
+        <div class="card">
+          <div class="section-title">Entrenamiento</div>
+          <div class="field">
+            <label for="minIou">IoU mínima del dataset</label>
+            <input id="minIou" type="number" step="0.01" min="0" max="1" value="0.05" />
+          </div>
+          <div class="toolbar">
+            <button class="btn warn" id="btnRefreshAuto">Regenerar auto máscara</button>
+            <button class="btn primary" id="btnTrain">Entrenar modelo ligero</button>
+          </div>
+          <div class="panel-text" id="trainingInfo" style="margin-top:10px;">Sin entrenamiento todavía.</div>
+          <hr style="border:0;border-top:1px solid var(--border);margin:14px 0;">
+          <div class="section-title">Muestra seleccionada</div>
+          <div class="panel-text" id="sampleInfo">Ninguna.</div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script type="module">
+    const state = {
+      samples: [],
+      selectedSample: null,
+      mode: 'paint',
+      drawing: false,
+      photoImage: null,
+      currentMaskUrl: null,
+      autoMaskUrl: null,
+      modelConfigPath: null,
+    };
+
+    const canvas = document.getElementById('editorCanvas');
+    const ctx = canvas.getContext('2d');
+    const maskCanvas = document.createElement('canvas');
+    const maskCtx = maskCanvas.getContext('2d');
+
+    async function api(path, method = 'GET', body = null) {
+      const opts = { method, headers: {} };
+      if (body !== null) {
+        opts.headers['Content-Type'] = 'application/json';
+        opts.body = JSON.stringify(body);
+      }
+      const resp = await fetch(path, opts);
+      const raw = await resp.text();
+      let data = {};
+      try { data = raw ? JSON.parse(raw) : {}; } catch { data = { detail: raw || 'API error' }; }
+      if (!resp.ok) throw new Error(data.detail || 'API error');
+      return data;
+    }
+
+    function setStatus(text, color = 'var(--muted)') {
+      const el = document.getElementById('statusBar');
+      el.textContent = text;
+      el.style.color = color;
+    }
+
+    function sampleById(id) {
+      return state.samples.find(s => s.sample_id === id) || null;
+    }
+
+    function renderSampleList() {
+      const list = document.getElementById('sampleList');
+      if (!state.samples.length) {
+        list.innerHTML = '<div class="panel-text">Todavía no hay muestras importadas.</div>';
+        return;
+      }
+      list.innerHTML = state.samples.map(sample => {
+        const selected = state.selectedSample && state.selectedSample.sample_id === sample.sample_id ? ' selected' : '';
+        const badge = sample.is_corrected
+          ? '<span class="badge ok">corregida</span>'
+          : '<span class="badge warn">auto</span>';
+        return `
+          <div class="sample-item${selected}" data-sample-id="${sample.sample_id}">
+            <div class="name">${escapeHtml(sample.image_name)} ${badge}</div>
+            <div class="meta">backend: ${escapeHtml(sample.auto_backend || 'n/a')}</div>
+            <div class="meta mono">${escapeHtml(sample.sample_id)}</div>
+          </div>`;
+      }).join('');
+      list.querySelectorAll('.sample-item').forEach(node => {
+        node.addEventListener('click', () => selectSample(node.dataset.sampleId));
+      });
+    }
+
+    function renderSummary(payload) {
+      const lab = payload.lab || {};
+      document.getElementById('dataset-summary').innerHTML = [
+        `Fotos disponibles: <strong>${payload.source?.available_photos_total ?? 0}</strong>`,
+        `Muestras en lab: <strong>${lab.samples_total ?? 0}</strong>`,
+        `Corregidas: <strong>${lab.corrected_total ?? 0}</strong>`,
+        `Modelo actual: <span class="mono">${escapeHtml(lab.model_config_path || 'sin entrenar')}</span>`,
+      ].join('<br/>');
+      document.getElementById('trainingInfo').innerHTML = lab.model_config
+        ? `Modelo cargado: <span class="mono">${escapeHtml(lab.model_config.model_name || 'segmentation_lite_ft_v1')}</span><br/>Threshold: <strong>${escapeHtml(String(lab.model_config.threshold ?? 'n/a'))}</strong>`
+        : 'Sin entrenamiento todavía.';
+    }
+
+    async function loadStatus() {
+      const data = await api('/human-shape-lab/status');
+      state.samples = data.samples || [];
+      renderSummary(data);
+      renderSampleList();
+      if (state.selectedSample) {
+        const fresh = sampleById(state.selectedSample.sample_id);
+        if (fresh) await selectSample(fresh.sample_id);
+      }
+    }
+
+    async function importAllPhotos() {
+      setStatus('Importando fotos y generando máscaras automáticas...');
+      const data = await api('/human-shape-lab/bootstrap', 'POST', {});
+      await loadStatus();
+      setStatus(`Importación completada: ${data.imported_total} muestras`, 'var(--ok)');
+    }
+
+    async function loadImage(url) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error(`No se pudo cargar imagen: ${url}`));
+        img.src = `${url}${url.includes('?') ? '&' : '?'}t=${Date.now()}`;
+      });
+    }
+
+    async function selectSample(sampleId) {
+      const sample = sampleById(sampleId);
+      if (!sample) return;
+      state.selectedSample = sample;
+      renderSampleList();
+      document.getElementById('sampleInfo').innerHTML = [
+        `Imagen: <span class="mono">${escapeHtml(sample.image_name)}</span>`,
+        `Máscara actual: <span class="mono">${escapeHtml(sample.current_mask_url || '')}</span>`,
+        `Máscara auto: <span class="mono">${escapeHtml(sample.auto_mask_url || '')}</span>`,
+      ].join('<br/>');
+      setStatus(`Cargando muestra ${sample.image_name}...`);
+      const photo = await loadImage(sample.image_url);
+      const mask = await loadImage(sample.current_mask_url || sample.auto_mask_url);
+      state.photoImage = photo;
+      state.autoMaskUrl = sample.auto_mask_url;
+      state.currentMaskUrl = sample.current_mask_url || sample.auto_mask_url;
+      canvas.width = photo.width;
+      canvas.height = photo.height;
+      maskCanvas.width = photo.width;
+      maskCanvas.height = photo.height;
+      maskCtx.clearRect(0, 0, maskCanvas.width, maskCanvas.height);
+      maskCtx.drawImage(mask, 0, 0, maskCanvas.width, maskCanvas.height);
+      drawComposite();
+      setStatus(`Muestra lista: ${sample.image_name}`, 'var(--ok)');
+    }
+
+    function drawComposite() {
+      if (!state.photoImage) return;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(state.photoImage, 0, 0, canvas.width, canvas.height);
+      const tmp = document.createElement('canvas');
+      tmp.width = maskCanvas.width;
+      tmp.height = maskCanvas.height;
+      const tctx = tmp.getContext('2d');
+      tctx.drawImage(maskCanvas, 0, 0);
+      const imgData = tctx.getImageData(0, 0, tmp.width, tmp.height);
+      for (let i = 0; i < imgData.data.length; i += 4) {
+        const alpha = imgData.data[i + 3];
+        const value = imgData.data[i];
+        if (alpha > 0 && value > 8) {
+          imgData.data[i] = 95;
+          imgData.data[i + 1] = 214;
+          imgData.data[i + 2] = 255;
+          imgData.data[i + 3] = 105;
+        } else {
+          imgData.data[i + 3] = 0;
+        }
+      }
+      tctx.putImageData(imgData, 0, 0);
+      ctx.drawImage(tmp, 0, 0);
+    }
+
+    function pointerToCanvas(evt) {
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      return {
+        x: (evt.clientX - rect.left) * scaleX,
+        y: (evt.clientY - rect.top) * scaleY,
+      };
+    }
+
+    function drawBrush(evt) {
+      if (!state.drawing || !state.photoImage) return;
+      const { x, y } = pointerToCanvas(evt);
+      const brush = Number(document.getElementById('brushSize').value || 18);
+      maskCtx.save();
+      maskCtx.globalCompositeOperation = 'source-over';
+      maskCtx.fillStyle = state.mode === 'paint' ? 'white' : 'black';
+      maskCtx.beginPath();
+      maskCtx.arc(x, y, brush, 0, Math.PI * 2);
+      maskCtx.fill();
+      maskCtx.restore();
+      drawComposite();
+    }
+
+    async function saveMask() {
+      if (!state.selectedSample) return;
+      setStatus('Guardando corrección...');
+      const dataUrl = maskCanvas.toDataURL('image/png');
+      const data = await api('/human-shape-lab/save-mask', 'POST', {
+        sample_id: state.selectedSample.sample_id,
+        mask_data_url: dataUrl,
+      });
+      await loadStatus();
+      await selectSample(data.sample.sample_id);
+      setStatus('Corrección guardada.', 'var(--ok)');
+    }
+
+    async function refreshAutoMask() {
+      if (!state.selectedSample) return;
+      setStatus('Regenerando auto máscara con el modelo actual...');
+      const data = await api(`/human-shape-lab/samples/${state.selectedSample.sample_id}/refresh-auto-mask`, 'POST', {});
+      await loadStatus();
+      await selectSample(data.sample.sample_id);
+      setStatus('Auto máscara regenerada.', 'var(--ok)');
+    }
+
+    async function resetToAuto() {
+      if (!state.autoMaskUrl || !state.selectedSample) return;
+      const mask = await loadImage(state.autoMaskUrl);
+      maskCtx.clearRect(0, 0, maskCanvas.width, maskCanvas.height);
+      maskCtx.drawImage(mask, 0, 0, maskCanvas.width, maskCanvas.height);
+      drawComposite();
+      setStatus('Máscara restaurada a la predicción automática. Guarda si quieres reemplazar la corrección.', 'var(--warn)');
+    }
+
+    async function trainModel() {
+      setStatus('Entrenando modelo ligero con máscaras corregidas...');
+      const minIou = Number(document.getElementById('minIou').value || 0.05);
+      const data = await api('/human-shape-lab/train', 'POST', { min_iou: minIou });
+      await loadStatus();
+      const training = data.training || {};
+      setStatus(`Entrenamiento completo. Val IoU=${training.val_iou ?? 'n/a'}`, 'var(--ok)');
+      document.getElementById('trainingInfo').innerHTML = [
+        `Modelo: <span class="mono">${escapeHtml(training.output_config_path || '')}</span>`,
+        `Threshold óptimo: <strong>${escapeHtml(String(training.best_threshold ?? 'n/a'))}</strong>`,
+        `Train IoU: <strong>${escapeHtml(String(training.train_best_iou ?? 'n/a'))}</strong>`,
+        `Val IoU: <strong>${escapeHtml(String(training.val_iou ?? 'n/a'))}</strong>`,
+      ].join('<br/>');
+    }
+
+    function escapeHtml(value) {
+      return String(value || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    canvas.addEventListener('pointerdown', evt => {
+      state.drawing = true;
+      drawBrush(evt);
+    });
+    canvas.addEventListener('pointermove', drawBrush);
+    window.addEventListener('pointerup', () => { state.drawing = false; });
+
+    document.getElementById('modePaint').addEventListener('click', () => {
+      state.mode = 'paint';
+      setStatus('Modo pintar activado.');
+    });
+    document.getElementById('modeErase').addEventListener('click', () => {
+      state.mode = 'erase';
+      setStatus('Modo borrar activado.');
+    });
+    document.getElementById('btnImportAll').addEventListener('click', importAllPhotos);
+    document.getElementById('btnReload').addEventListener('click', loadStatus);
+    document.getElementById('btnSaveMask').addEventListener('click', saveMask);
+    document.getElementById('btnRefreshAuto').addEventListener('click', refreshAutoMask);
+    document.getElementById('btnResetToAuto').addEventListener('click', resetToAuto);
+    document.getElementById('btnTrain').addEventListener('click', trainModel);
+
+    await loadStatus();
+  </script>
+</body>
+</html>
