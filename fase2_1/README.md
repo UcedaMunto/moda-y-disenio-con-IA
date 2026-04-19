@@ -157,7 +157,8 @@ sequenceDiagram
 Limites actuales del MVP 2.1:
 
 - `segment_person` usa `mediapipe_selfie_segmentation` y fallback `fallback_ellipse` si falla backend.
-- `run_tryon` mantiene salida placeholder (copia de imagen base) para validar contratos/API.
+- `run_tryon` aplica composicion por capas cuando `garment_path` es imagen raster (`png/jpg/webp`).
+- Si la prenda no es raster (por ejemplo `.obj`) o falla el render, mantiene fallback placeholder (copia de imagen base).
 - Fallback activo cuando DB no inicializa en startup: la API sigue operativa.
 
 ```mermaid

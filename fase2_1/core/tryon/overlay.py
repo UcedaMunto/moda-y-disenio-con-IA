@@ -52,3 +52,35 @@ def alpha_overlay_with_occlusion(background, overlay_rgba, occlusion_mask, x: in
     blended = (effective_alpha * rgb + (1.0 - effective_alpha) * roi).astype(np.uint8)
     background[y:y_end, x:x_end] = blended
     return background
+
+
+def build_upper_occlusion_mask(person_mask: np.ndarray, upper_ratio: float = 0.45) -> np.ndarray:
+    """Construye mascara de oclusion priorizando capa frontal superior.
+
+    La segmentacion completa de persona no puede usarse directamente como
+    oclusion porque ocultaria toda la prenda. Este helper limita la oclusion
+    a la zona superior donde suelen aparecer brazos/cabello en primer plano.
+    """
+    if person_mask.ndim != 2:
+        raise ValueError("person_mask debe ser matriz 2D")
+
+    h = person_mask.shape[0]
+    split = max(1, min(h, int(h * float(upper_ratio))))
+
+    out = np.zeros_like(person_mask, dtype=np.uint8)
+    out[:split, :] = np.where(person_mask[:split, :] > 0, 255, 0).astype(np.uint8)
+    return out
+
+
+def compose_tryon_layers(
+    background_rgb: np.ndarray,
+    garment_rgba: np.ndarray,
+    x: int,
+    y: int,
+    occlusion_mask: np.ndarray | None = None,
+) -> np.ndarray:
+    """Composicion por orden de capas: fondo -> prenda -> oclusores."""
+    canvas = background_rgb.copy()
+    if occlusion_mask is None:
+        return alpha_overlay(canvas, garment_rgba, x=x, y=y)
+    return alpha_overlay_with_occlusion(canvas, garment_rgba, occlusion_mask=occlusion_mask, x=x, y=y)

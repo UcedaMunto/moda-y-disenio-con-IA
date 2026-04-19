@@ -57,14 +57,14 @@ Tareas:
 
 1. [x] Integrar segmentacion open source preentrenada.
 2. [x] Agregar mascara de oclusion simple (brazos/torso).
-3. Mejorar overlay con alpha y orden de capas.
+3. [x] Mejorar overlay con alpha y orden de capas.
 4. [x] Definir metrica visual interna por checklist.
 
 Progreso actual de inicio Semana 2:
 
 - [x] Contrato de segmentacion incorporado en pipeline (`parsing.py`) con backend preentrenado y fallback robusto.
 - [x] Metadata de segmentacion propagada en salida de `run_tryon`.
-- [x] Funcion de overlay con oclusion por mascara incorporada y testeada.
+- [x] Funcion de overlay con oclusion por mascara incorporada y testeada (composicion por capas habilitada para prendas raster).
 - [x] Checklist de calidad visual versionado en `fase2_1/config/quality_checklist.json`.
 
 Criterios de aceptacion:
