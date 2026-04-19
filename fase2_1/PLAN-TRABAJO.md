@@ -107,6 +107,10 @@ Tareas:
 3. Documentar limites conocidos y backlog 2.2.
 4. Demo interna con casos representativos.
 
+Progreso actual Semana 4:
+
+- [x] Migracion de startup API principal a `lifespan` (sin `on_event` deprecado).
+
 Criterios de aceptacion:
 
 1. Tiempo por imagen <= 2.5s en baseline CPU.

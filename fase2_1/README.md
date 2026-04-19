@@ -107,6 +107,27 @@ flowchart TD
    G --> H[Batch Report + Evaluacion Consolidada]
 ```
 
+## Secuencia de inicializacion (hardening API)
+
+```mermaid
+sequenceDiagram
+   participant VS as Uvicorn/FastAPI
+   participant LF as lifespan(app)
+   participant DB as init_database()
+   participant API as Endpoints
+
+   VS->>LF: startup
+   LF->>DB: intento de inicializacion
+   alt DB disponible
+      DB-->>LF: ok
+   else DB no disponible
+      DB-->>LF: exception controlada
+      LF-->>LF: continuar sin tumbar API
+   end
+   LF-->>VS: app lista
+   VS->>API: acepta requests
+```
+
 ---
 
 ## Criterio técnico de esta fase

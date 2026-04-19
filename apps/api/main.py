@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi import HTTPException
 import base64
@@ -32,7 +33,18 @@ from fase2_1.core.tryon.schemas import (
 )
 
 
-app = FastAPI(title="Fabric2Mesh API", version="0.1.0")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    # Ensure feedback table exists before first write.
+    try:
+        init_database()
+    except Exception:
+        # Keep API running with file fallback when DB is down.
+        pass
+    yield
+
+
+app = FastAPI(title="Fabric2Mesh API", version="0.1.0", lifespan=lifespan)
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 DATA_DIR = (BASE_DIR / "data").resolve()
@@ -254,16 +266,6 @@ def get_model_index(force_refresh: bool = False) -> list[dict]:
         key=lambda m: (m.get("_source_rank", 1), str(m.get("name", "")).lower()),
     )
     return _MODEL_INDEX_CACHE
-
-
-@app.on_event("startup")
-def on_startup() -> None:
-    # Ensure feedback table exists before first write.
-    try:
-        init_database()
-    except Exception:
-        # Keep API running with file fallback when DB is down.
-        pass
 
 
 @app.get("/")
