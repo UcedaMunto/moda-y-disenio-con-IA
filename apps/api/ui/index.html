@@ -335,7 +335,7 @@
           </div>
           <button class="btn btn-accent" id="btnSaveLook">💾 Guardar modelo para prueba virtual</button>
           <div id="saveLookStatus" style="font-size:0.75rem;color:var(--ink2);margin-top:4px;"></div>
-          <a href="/tryon" target="_blank" style="display:block;margin-top:6px;font-size:0.78rem;text-align:center;color:var(--accent);text-decoration:underline;">→ Ir a Prueba Virtual</a>
+          <a id="tryonLink" href="/tryon" target="_blank" style="display:block;margin-top:6px;font-size:0.78rem;text-align:center;color:var(--accent);text-decoration:underline;">→ Ir a Prueba Virtual</a>
         </div>
       </aside>
 
@@ -431,6 +431,13 @@
     };
 
     const byId = (id) => document.getElementById(id);
+
+    function looksApiPath(path) {
+      // Bridge: editor in :8000 can persist looks into the active tryon API in :8001.
+      if (window.location.port === "8000") return `http://localhost:8001${path}`;
+      return path;
+    }
+
     const logBox = byId("console");
 
     function installConsoleWarnFilter() {
@@ -1540,7 +1547,7 @@
       if (!modelPath) { statusEl.textContent = "⚠ Selecciona un modelo 3D primero."; statusEl.style.color = "var(--warn)"; return; }
       statusEl.textContent = "Guardando…"; statusEl.style.color = "var(--ink2)";
       try {
-        const resp = await api("/looks/save", "POST", {
+        const resp = await api(looksApiPath("/looks/save"), "POST", {
           name,
           model_path: modelPath,
           texture_path: texturePath,
@@ -1580,6 +1587,10 @@
       reader.onload = () => { preview.innerHTML = `<img src="${reader.result}" alt="preview" />`; };
       reader.readAsDataURL(f);
     });
+
+    if (byId("tryonLink")) {
+      byId("tryonLink").href = looksApiPath("/tryon");
+    }
 
     setStatus("Cargando catálogo…");
     Promise.all([loadCatalog(), refreshAll()]).catch((e) => { log("Startup error", e.message); setStatus("Error al iniciar"); });

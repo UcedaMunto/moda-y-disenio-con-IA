@@ -1,0 +1,10 @@
+{
+  "look_id": "55f3fa5433e2",
+  "name": "look-puente-test",
+  "model_path": "data/raw/models/TShirts.obj",
+  "texture_path": "data/raw/telas/gris.webp",
+  "garment_type": "shirt",
+  "project_id": "bridge-test",
+  "notes": null,
+  "created_at": 1776610651
+}

@@ -4,7 +4,7 @@ services:
       context: .
       dockerfile: apps/api/Dockerfile
     ports:
-      - "8000:8000"
+      - "8001:8000"
     volumes:
       - .:/app
       - /home/uceda/Downloads:/mnt/downloads:ro

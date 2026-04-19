@@ -11,6 +11,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 
 from core.db.postgres import init_database
 from core.assets.importer import import_assets_from_directory
@@ -46,6 +47,17 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="Fabric2Mesh API", version="0.1.0", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:8000",
+        "http://localhost:8001",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 DATA_DIR = (BASE_DIR / "data").resolve()

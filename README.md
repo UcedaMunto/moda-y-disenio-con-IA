@@ -1,3 +1,231 @@
+# Fabric2Mesh AI
+
+Repositorio para generacion de texturas, aplicacion en modelos 3D y prueba virtual sobre fotos.
+
+## Estado Actual
+
+- Editor web principal: GET /
+- Flujo de texturas y 3D: operativo
+- Flujo Fase 2.1 (foto): operativo
+- Flujo Fase 2.2 (pipeline v2 para try-on): operativo
+- Guardado de looks y prueba virtual en fotos_personas: operativo
+
+## Objetivo del Proyecto
+
+Flujo principal:
+
+1. Cargar o importar telas
+2. Generar candidatos de textura
+3. Visualizar preview 2D y 3D
+4. Exportar modelo final
+5. Guardar look
+6. Aplicar look en fotos de personas
+
+## Arquitectura Resumida
+
+- Backend: FastAPI en apps/api/main.py
+- Motor textura: core/texture/*
+- Render/export 3D: core/rendering/*
+- Catalogo y assets: core/assets/*
+- Fase 2.1 try-on: fase2_1/core/tryon/*
+- Fase 2.2 try-on v2: fase2_2/core/tryon/*
+- UI: apps/api/ui/index.html y apps/api/ui/tryon.html
+
+## Ejecucion Local
+
+### 1) Activar entorno
+
+```bash
+source .venv/bin/activate
+```
+
+### 2) Levantar API
+
+```bash
+uvicorn apps.api.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+### 3) Abrir interfaz
+
+- Editor: http://localhost:8000/
+- Prueba virtual: http://localhost:8000/tryon
+
+## Documentacion de APIs
+
+Base URL local: http://localhost:8000
+
+### Salud y UI
+
+| Metodo | Endpoint | Descripcion |
+|---|---|---|
+| GET | / | Sirve la interfaz principal index.html |
+| GET | /tryon | Sirve la interfaz de prueba virtual tryon.html |
+| GET | /health | Estado de API y disponibilidad de base de datos |
+
+### Catalogo de Assets
+
+| Metodo | Endpoint | Descripcion |
+|---|---|---|
+| GET | /assets/catalog | Lista telas, modelos y estadisticas de indexado |
+| GET | /assets/model-search | Busqueda de modelos por texto con limite |
+| POST | /assets/import-from-downloads | Importa assets desde carpeta de descargas |
+| POST | /assets/upload-fabric | Sube una tela en data_url base64 |
+| GET | /assets/deepfashion-coverage | Reporte de cobertura entre datasets DeepFashion |
+
+### Proyectos de Textura y 3D
+
+| Metodo | Endpoint | Descripcion |
+|---|---|---|
+| GET | /projects/validate-model | Valida contrato de modelo 3D |
+| POST | /projects/generate | Genera candidatos de textura por proyecto |
+| POST | /projects/select | Selecciona textura y exporta modelo |
+| POST | /projects/preview-3d | Genera preview 3D en imagen |
+| POST | /projects/{project_id}/preview-sheet | Genera hoja 2D de candidatos |
+| GET | /projects/{project_id}/candidates | Lista candidatos guardados del proyecto |
+| POST | /projects/feedback | Registra feedback approve/reject |
+| GET | /projects/{project_id}/feedback-summary | Resumen de feedback |
+| GET | /projects/{project_id}/ranking | Ranking por feedback |
+| GET | /projects/{project_id}/metrics | Metricas agregadas del proyecto |
+
+### Fase 2.1 Try-On
+
+| Metodo | Endpoint | Descripcion |
+|---|---|---|
+| POST | /fase2_1/tryon/run | Ejecuta try-on de una imagen |
+| POST | /fase2_1/tryon/batch | Ejecuta evaluacion batch |
+| POST | /fase2_1/tryon/evaluate | Guarda evaluacion manual por imagen |
+| GET | /fase2_1/tryon/evaluate-summary | Resume evaluaciones manuales |
+| GET | /fase2_1/tryon/evaluate-consolidated | Consolida batch + evaluacion manual |
+
+### Looks y Prueba Virtual
+
+| Metodo | Endpoint | Descripcion |
+|---|---|---|
+| POST | /looks/save | Guarda look (modelo + textura + metadatos) |
+| GET | /looks | Lista looks guardados |
+| DELETE | /looks/{look_id} | Elimina look |
+| GET | /fotos-personas | Lista fotos disponibles de fotos_personas |
+| POST | /tryon/apply | Aplica look sobre foto usando pipeline_v2 |
+
+## Contratos Principales de Request
+
+### POST /projects/generate
+
+```json
+{
+  "project_id": "case-demo",
+  "image_paths": ["data/raw/telas/gris.webp"],
+  "n_candidates": 6
+}
+```
+
+### POST /projects/select
+
+```json
+{
+  "project_id": "case-demo",
+  "model_path": "data/raw/models/TShirts.obj",
+  "selected_texture_path": "data/processed/textures/case-demo/candidate_01.png",
+  "output_path": "data/exports/case-demo.glb",
+  "convert_point_cloud": true
+}
+```
+
+### POST /projects/preview-3d
+
+```json
+{
+  "project_id": "case-demo",
+  "model_path": "data/raw/models/TShirts.obj",
+  "texture_path": "data/processed/textures/case-demo/candidate_01.png",
+  "output_path": "data/processed/preview/preview_3d.png",
+  "convert_point_cloud": true
+}
+```
+
+### POST /projects/feedback
+
+```json
+{
+  "project_id": "case-demo",
+  "candidate_path": "data/processed/textures/case-demo/candidate_01.png",
+  "label": "approve",
+  "score": 5,
+  "comment": "textura aprobada"
+}
+```
+
+### POST /assets/upload-fabric
+
+```json
+{
+  "name": "tela-rayas-azul",
+  "data_url": "data:image/png;base64,iVBOR..."
+}
+```
+
+### POST /looks/save
+
+```json
+{
+  "name": "Look Verano 01",
+  "model_path": "data/raw/models/TShirts.obj",
+  "texture_path": "data/processed/textures/case-demo/candidate_01.png",
+  "garment_type": "shirt",
+  "project_id": "case-demo",
+  "notes": "look para pruebas internas"
+}
+```
+
+### POST /tryon/apply
+
+```json
+{
+  "look_id": "a1b2c3d4e5f6",
+  "foto_nombre": "woman-in-a-dress-full-body-1615891441oP5.jpg"
+}
+```
+
+## Storage y Rutas Estaticas
+
+- /artifacts -> carpeta data
+- /ui-static -> carpeta apps/api/ui
+- /deepfashion-artifacts -> carpeta data_deepfashon (si existe)
+- /deepfashion-antiguo-artifacts -> carpeta data_deepfasho_antiguo (si existe)
+- /fotos-personas-static -> carpeta fotos_personas (si existe)
+
+## Consola de Trabajo Recomendada
+
+```bash
+source .venv/bin/activate
+uvicorn apps.api.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+Luego abrir:
+
+- http://localhost:8000/
+- http://localhost:8000/tryon
+
+## Indice de Documentacion en docs
+
+Todos los archivos Markdown secundarios fueron movidos a la carpeta docs.
+
+- [docs/ANALYSIS_410_MODEL.md](docs/ANALYSIS_410_MODEL.md)
+- [docs/ANALYSIS_POINT_CLOUDS_TEXTURE.md](docs/ANALYSIS_POINT_CLOUDS_TEXTURE.md)
+- [docs/BACKLOG_TECNICO.md](docs/BACKLOG_TECNICO.md)
+- [docs/INFORME_DE_DUDAS.md](docs/INFORME_DE_DUDAS.md)
+- [docs/PLAN_DE_TRABAJO.md](docs/PLAN_DE_TRABAJO.md)
+- [docs/README-FASE2.md](docs/README-FASE2.md)
+- [docs/SESION_RESUMEN.md](docs/SESION_RESUMEN.md)
+- [docs/apps/worker/README.md](docs/apps/worker/README.md)
+- [docs/fase2_1/README.md](docs/fase2_1/README.md)
+- [docs/fase2_1/PLAN-TRABAJO.md](docs/fase2_1/PLAN-TRABAJO.md)
+- [docs/fase2_1/api/README.md](docs/fase2_1/api/README.md)
+- [docs/fase2_1/config/README.md](docs/fase2_1/config/README.md)
+- [docs/fase2_1/core/training/fit_regression/README.md](docs/fase2_1/core/training/fit_regression/README.md)
+- [docs/fase2_1/core/training/segmentation/README.md](docs/fase2_1/core/training/segmentation/README.md)
+- [docs/fase2_2/README.md](docs/fase2_2/README.md)
+- [docs/fase2_2/PLAN-TRABAJO.md](docs/fase2_2/PLAN-TRABAJO.md)
 # 🧵 Fabric2Mesh AI (Local + AMD + Docker Hybrid)
 
 Sistema de IA para generar texturas de telas desde pocas imágenes (2–10) y aplicarlas automáticamente a modelos 3D existentes.
@@ -400,13 +628,27 @@ MIT
 
 ## ✅ Estado actual del repositorio
 
-### Actualizacion reciente (2026-04-18)
+### Actualizacion reciente (2026-04-19)
 
 Novedades implementadas y validadas:
 
-* Integracion de modelos DeepFashion desde dos fuentes:
-  * `data_deepfashon/point_cloud/...`
-  * `data_deepfasho_antiguo/pointcloud/...`
+* **Fuente de modelos 3D cambiada**: el índice ahora usa mallas OBJ reales desde `data_deepfasho_antiguo/mesh/`
+  * Estructura: `mesh/<garment_id>-<pose>/model_cleaned.obj` (con `.mtl` y textura PNG adjunta)
+  * Reemplaza el uso anterior de nubes de puntos `.ply` de `data_deepfasho_antiguo/pointcloud/`
+  * **1212 modelos OBJ** distribuidos en **~492 IDs** únicos, todos con malla triangulada lista para texturizar
+* Fuente secundaria de nubes de puntos `data_deepfashon/point_cloud/` se mantiene disponible en el índice
+* La UI muestra correctamente los modelos de mesh antiguo con badge OBJ (no POINT CLOUD)
+* URL de servicio de archivos estáticos: `/deepfashion-antiguo-artifacts/mesh/...`
+* El campo `is_point_cloud` es `false` para todos los modelos en `mesh/`
+* El ranking de fuentes fue ajustado: `local > deepfashion_antiguo (mesh) > deepfashion (point_cloud)`
+
+### Actualizacion anterior (2026-04-18)
+
+Novedades implementadas y validadas:
+
+* Integracion de modelos DeepFashion desde dos fuentes (ahora actualizadas):
+  * `data_deepfashon/point_cloud/...` (nubes de puntos)
+  * `data_deepfasho_antiguo/mesh/...` (mallas OBJ — fuente primaria)
 * Etiquetado automatico por tipo de prenda (`shirt`, `dress`, `pants`) usando `cloth_type_list.txt`
 * Deteccion de `point cloud` en API/UI con metadatos (`source`, `is_point_cloud`, `garment_type`)
 * Conversion on-demand de nubes de puntos (`.ply`) a malla proxy para operaciones backend:
@@ -420,7 +662,8 @@ Novedades implementadas y validadas:
 
 Notas:
 
-* `deepfashion2/` es un dataset 2D (imagenes + anotaciones), no una fuente de modelos 3D para texturizar.
+* `data_deepfasho_antiguo/mesh/` contiene **mallas trianguladas reales** (OBJ) con UV y textura PNG por carpeta.
+* `data_deepfashon/point_cloud/` son nubes de puntos densas; útiles solo si no hay OBJ equivalente.
 * La conversion de point cloud a malla es un proxy rapido para pruebas; puede perder detalle fino respecto a la nube original.
 
 Implementado en esta iteracion:
