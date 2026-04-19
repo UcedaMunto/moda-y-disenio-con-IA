@@ -106,15 +106,18 @@ Objetivo:
 Tareas:
 
 1. [x] Integrar prediccion de offset en `pipeline.py`.
-2. [ ] Benchmark comparativo 2.1 vs 2.2 (visual + metrico).
-3. [ ] Documentar limites conocidos y backlog 2.3.
-4. [ ] Demo interna con casos representativos.
+2. [x] Benchmark comparativo 2.1 vs 2.2 (visual + metrico).
+3. [x] Documentar limites conocidos y backlog 2.3.
+4. [x] Demo interna con casos representativos.
 
 Progreso actual Semana 4:
 
 - [x] Pipeline `core/tryon/pipeline_v2.py` con transformacion por modelo (scale + offset_x + offset_y).
 - [x] Integracion de segmentacion v2 (`segment_person_v2`) y metadata de trazabilidad en `meta.transform_source`.
 - [x] Tests `test_fase2_2_pipeline_v2.py` (2 tests, 2 passed).
+- [x] Script comparativo `benchmark_compare_v21_v22.py` con reporte de latencia/success_rate por version.
+- [x] Demo interna reproducible `run_internal_demo.py` ejecutada y guardada en `data/processed/fase2_2_demo/demo_report.json`.
+- [x] Documentacion de limites 2.2 y backlog 2.3 en README de fase2_2.
 
 ---
 
