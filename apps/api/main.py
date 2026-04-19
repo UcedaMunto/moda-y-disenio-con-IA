@@ -52,9 +52,12 @@ DATA_DIR = (BASE_DIR / "data").resolve()
 UI_DIR = (BASE_DIR / "apps" / "api" / "ui").resolve()
 DEEPFASHION_DIR = (BASE_DIR / "data_deepfashon").resolve()
 DEEPFASHION_ANTIGUO_DIR = (BASE_DIR / "data_deepfasho_antiguo").resolve()
+FOTOS_PERSONAS_DIR = (BASE_DIR / "fotos_personas").resolve()
+LOOKS_DIR = DATA_DIR / "looks"
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 UI_DIR.mkdir(parents=True, exist_ok=True)
+LOOKS_DIR.mkdir(parents=True, exist_ok=True)
 
 app.mount("/artifacts", StaticFiles(directory=str(DATA_DIR)), name="artifacts")
 app.mount("/ui-static", StaticFiles(directory=str(UI_DIR)), name="ui-static")
@@ -62,6 +65,8 @@ if DEEPFASHION_DIR.exists():
     app.mount("/deepfashion-artifacts", StaticFiles(directory=str(DEEPFASHION_DIR)), name="deepfashion-artifacts")
 if DEEPFASHION_ANTIGUO_DIR.exists():
     app.mount("/deepfashion-antiguo-artifacts", StaticFiles(directory=str(DEEPFASHION_ANTIGUO_DIR)), name="deepfashion-antiguo-artifacts")
+if FOTOS_PERSONAS_DIR.exists():
+    app.mount("/fotos-personas-static", StaticFiles(directory=str(FOTOS_PERSONAS_DIR)), name="fotos-personas-static")
 
 
 MODEL_EXT = {".obj", ".glb", ".gltf", ".fbx", ".ply"}
@@ -95,7 +100,7 @@ def _model_item(logical_path: str, size_bytes: int, garment_type_override: str |
     suffix = Path(logical_path).suffix.lower()
     name = Path(logical_path).name
     garment_type = garment_type_override or infer_garment_type(Path(logical_path).name)
-    is_point_cloud = "/point_cloud/" in logical_path or "/pointcloud/" in logical_path or logical_path.endswith(".ply")
+    is_point_cloud = ("/point_cloud/" in logical_path or "/pointcloud/" in logical_path or logical_path.endswith(".ply")) and "/mesh/" not in logical_path
     
     if source_override:
         source = source_override
@@ -108,7 +113,7 @@ def _model_item(logical_path: str, size_bytes: int, garment_type_override: str |
     else:
         source = "unknown"
     
-    source_rank = {"local": 0, "deepfashion": 1, "deepfashion_antiguo": 2, "unknown": 3}.get(source, 3)
+    source_rank = {"local": 0, "deepfashion_antiguo": 1, "deepfashion": 2, "unknown": 3}.get(source, 3)
     
     return {
         "path": logical_path,
@@ -220,17 +225,18 @@ def _scan_deepfashion_models(base_dir: Path, cloth_map: dict[str, str]) -> list[
 
 
 def _scan_deepfashion_antiguo_models(base_dir: Path, cloth_map: dict[str, str]) -> list[dict]:
-    """Index garment point clouds from the older DeepFashion dataset.
-    
+    """Index garment OBJ meshes from the older DeepFashion dataset.
+
     Uses the same cloth_type_list.txt for garment classification.
-    The directory structure is: pointcloud/<id>/<id-pose>.ply
+    The directory structure is: mesh/<id>-<pose>/model_cleaned.obj
+    The garment ID is the numeric prefix before the first '-' in the folder name.
     """
     out: list[dict] = []
-    point_cloud_dir = base_dir / "pointcloud"
-    if not point_cloud_dir.exists():
+    mesh_dir = base_dir / "mesh"
+    if not mesh_dir.exists():
         return out
 
-    for path in sorted(point_cloud_dir.rglob("*.ply")):
+    for path in sorted(mesh_dir.rglob("*.obj")):
         try:
             size_bytes = path.stat().st_size
         except OSError:
@@ -238,8 +244,9 @@ def _scan_deepfashion_antiguo_models(base_dir: Path, cloth_map: dict[str, str]) 
         if size_bytes > MAX_MODEL_FILE_BYTES:
             continue
 
-        rel = path.relative_to(base_dir).as_posix()  # pointcloud/<id>/<id-pose>.ply
-        top_id = rel.split("/", 2)[1] if rel.startswith("pointcloud/") and "/" in rel else ""
+        rel = path.relative_to(base_dir).as_posix()  # mesh/<id>-<pose>/model_cleaned.obj
+        folder = rel.split("/", 2)[1] if rel.startswith("mesh/") and "/" in rel else ""
+        top_id = folder.split("-")[0] if "-" in folder else folder
         garment_type = cloth_map.get(top_id)
         if not garment_type:
             # Keep only IDs explicitly defined as clothes in cloth_type_list.
@@ -893,3 +900,159 @@ def preview_3d(request: Preview3DRequest) -> dict:
         "preview_path": preview_path,
         "model_report": model_report,
     }
+
+
+# ---------------------------------------------------------------------------
+# Looks — guardar modelos creados para prueba virtual
+# ---------------------------------------------------------------------------
+
+class SaveLookRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    name: str = Field(..., min_length=1, max_length=100)
+    model_path: str
+    texture_path: str | None = None
+    garment_type: str = "other"
+    project_id: str | None = None
+    notes: str | None = None
+
+
+class TryOnApplyRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    look_id: str
+    foto_nombre: str
+
+
+def _look_manifest_path(look_id: str) -> Path:
+    return LOOKS_DIR / look_id / "manifest.json"
+
+
+@app.post("/looks/save")
+def save_look(request: SaveLookRequest) -> dict:
+    import uuid as _uuid
+    look_id = _uuid.uuid4().hex[:12]
+    look_dir = LOOKS_DIR / look_id
+    look_dir.mkdir(parents=True, exist_ok=True)
+    manifest = {
+        "look_id": look_id,
+        "name": request.name,
+        "model_path": request.model_path,
+        "texture_path": request.texture_path,
+        "garment_type": request.garment_type,
+        "project_id": request.project_id,
+        "notes": request.notes,
+        "created_at": int(time.time()),
+    }
+    (_look_manifest_path(look_id)).write_text(json.dumps(manifest, ensure_ascii=False, indent=2))
+    return {"status": "saved", "look_id": look_id, "look": manifest}
+
+
+@app.get("/looks")
+def list_looks() -> dict:
+    looks = []
+    if LOOKS_DIR.exists():
+        for manifest_path in sorted(LOOKS_DIR.glob("*/manifest.json")):
+            try:
+                looks.append(json.loads(manifest_path.read_text()))
+            except Exception:
+                pass
+    looks.sort(key=lambda x: x.get("created_at", 0), reverse=True)
+    return {"total": len(looks), "looks": looks}
+
+
+@app.delete("/looks/{look_id}")
+def delete_look(look_id: str) -> dict:
+    import shutil
+    look_dir = LOOKS_DIR / look_id
+    if not look_dir.exists():
+        raise HTTPException(status_code=404, detail="Look no encontrado")
+    shutil.rmtree(look_dir)
+    return {"status": "deleted", "look_id": look_id}
+
+
+# ---------------------------------------------------------------------------
+# Fotos personas — listar fotos disponibles para prueba virtual
+# ---------------------------------------------------------------------------
+
+FOTO_EXT = {".jpg", ".jpeg", ".png", ".webp", ".avif"}
+
+
+@app.get("/fotos-personas")
+def list_fotos_personas() -> dict:
+    fotos = []
+    if FOTOS_PERSONAS_DIR.exists():
+        for f in sorted(FOTOS_PERSONAS_DIR.iterdir()):
+            if f.is_file() and f.suffix.lower() in FOTO_EXT:
+                fotos.append({
+                    "nombre": f.name,
+                    "url": f"/fotos-personas-static/{f.name}",
+                    "size_bytes": f.stat().st_size,
+                })
+    return {"total": len(fotos), "fotos": fotos}
+
+
+# ---------------------------------------------------------------------------
+# Prueba virtual — aplicar look sobre foto de persona
+# ---------------------------------------------------------------------------
+
+@app.post("/tryon/apply")
+def tryon_apply(request: TryOnApplyRequest) -> dict:
+    """Superpone el look guardado sobre una foto de fotos_personas/ usando pipeline_v2."""
+    manifest_path = _look_manifest_path(request.look_id)
+    if not manifest_path.exists():
+        raise HTTPException(status_code=404, detail="Look no encontrado")
+    manifest = json.loads(manifest_path.read_text())
+
+    foto_path = FOTOS_PERSONAS_DIR / request.foto_nombre
+    if not foto_path.exists() or foto_path.suffix.lower() not in FOTO_EXT:
+        raise HTTPException(status_code=404, detail="Foto no encontrada")
+
+    garment_path = manifest.get("texture_path") or manifest.get("model_path")
+    if not garment_path:
+        raise HTTPException(status_code=400, detail="El look no tiene textura ni modelo asignado")
+
+    garment_full = BASE_DIR / garment_path if not Path(garment_path).is_absolute() else Path(garment_path)
+    if not garment_full.exists():
+        raise HTTPException(status_code=400, detail=f"Archivo de prenda no encontrado: {garment_path}")
+
+    output_dir = DATA_DIR / "tryon_results"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_name = f"tryon_{request.look_id}_{foto_path.stem}_{int(time.time())}.png"
+    output_path = str(output_dir / output_name)
+
+    try:
+        from fase2_2.core.tryon.pipeline_v2 import run_tryon_v2
+        from fase2_1.core.tryon.schemas import TryOnRequest as _TryOnRequest
+        tryon_req = _TryOnRequest(
+            image_path=str(foto_path),
+            garment_path=str(garment_full),
+            output_path=output_path,
+        )
+        result = run_tryon_v2(tryon_req)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error en pipeline: {exc}") from exc
+
+    result_output = result.get("output_path", output_path)
+    url = None
+    try:
+        rel = Path(result_output).relative_to(DATA_DIR)
+        url = f"/artifacts/{rel}"
+    except ValueError:
+        pass
+
+    return {
+        "status": result.get("status", "ok"),
+        "look_id": request.look_id,
+        "look_name": manifest.get("name"),
+        "foto": request.foto_nombre,
+        "output_path": result_output,
+        "url": url,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Rutas HTML para navegador
+# ---------------------------------------------------------------------------
+
+@app.get("/tryon")
+def tryon_page() -> FileResponse:
+    return FileResponse(str(UI_DIR / "tryon.html"))

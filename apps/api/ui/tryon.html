@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Prueba Virtual — Moda con IA</title>
+  <style>
+    :root {
+      --bg: #0b0f14;
+      --surface: #111820;
+      --surface2: #182030;
+      --accent: #3ecfcf;
+      --accent-dim: rgba(62,207,207,0.15);
+      --ink: #e8f0f8;
+      --ink2: #8090a8;
+      --ok: #4caf50;
+      --err: #ef5350;
+      --warn: #ffb74d;
+      --border: #1e3040;
+      --radius: 8px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--ink); font-family: system-ui, sans-serif; min-height: 100vh; }
+
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    header h1 { font-size: 1.1rem; color: var(--accent); }
+    header a { color: var(--ink2); font-size: 0.82rem; text-decoration: none; }
+    header a:hover { color: var(--accent); }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 320px 1fr;
+      height: calc(100vh - 53px);
+    }
+
+    aside {
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      overflow-y: auto;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .section-title {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--ink2);
+      padding-bottom: 6px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .look-card {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 10px 12px;
+      cursor: pointer;
+      transition: border-color 0.15s;
+    }
+    .look-card:hover { border-color: var(--accent); }
+    .look-card.selected { border-color: var(--accent); background: var(--accent-dim); }
+    .look-card .look-name { font-size: 0.88rem; font-weight: 600; color: var(--ink); }
+    .look-card .look-meta { font-size: 0.72rem; color: var(--ink2); margin-top: 3px; word-break: break-all; }
+
+    .foto-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 8px;
+    }
+    .foto-card {
+      background: var(--surface2);
+      border: 2px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      cursor: pointer;
+      transition: border-color 0.15s;
+      aspect-ratio: 3/4;
+    }
+    .foto-card:hover { border-color: var(--accent); }
+    .foto-card.selected { border-color: var(--accent); }
+    .foto-card img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .foto-card .foto-name {
+      font-size: 0.65rem;
+      color: var(--ink2);
+      padding: 3px 4px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      background: var(--surface);
+    }
+
+    main {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 24px;
+      gap: 16px;
+      overflow-y: auto;
+    }
+
+    .apply-bar {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      background: var(--surface2);
+      color: var(--ink);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 18px;
+      cursor: pointer;
+      font-size: 0.85rem;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .btn:hover { background: var(--border); }
+    .btn-accent { background: var(--accent); color: #0b0f14; border-color: var(--accent); font-weight: 700; }
+    .btn-accent:hover { opacity: 0.88; }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    #status-bar {
+      font-size: 0.8rem;
+      color: var(--ink2);
+      min-height: 20px;
+    }
+
+    #result-area {
+      width: 100%;
+      max-width: 700px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+    }
+
+    #result-img {
+      max-width: 100%;
+      max-height: 70vh;
+      border-radius: var(--radius);
+      border: 2px solid var(--border);
+      object-fit: contain;
+      display: none;
+    }
+
+    #result-img.visible { display: block; }
+
+    .empty-hint {
+      color: var(--ink2);
+      font-size: 0.85rem;
+      text-align: center;
+      margin-top: 40px;
+      line-height: 1.8;
+    }
+
+    .no-items { color: var(--ink2); font-size: 0.78rem; padding: 8px 0; }
+
+    .spinner {
+      width: 36px;
+      height: 36px;
+      border: 3px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      display: none;
+    }
+    .spinner.visible { display: block; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>👗 Prueba Virtual</h1>
+    <a href="/">← Volver al editor</a>
+  </header>
+
+  <div class="layout">
+    <!-- Sidebar -->
+    <aside>
+      <div>
+        <div class="section-title">Looks guardados</div>
+        <div id="looks-list" style="margin-top:10px;display:flex;flex-direction:column;gap:8px;">
+          <div class="no-items">Cargando…</div>
+        </div>
+      </div>
+
+      <div>
+        <div class="section-title">Fotos de personas</div>
+        <div class="foto-grid" id="fotos-grid" style="margin-top:10px;">
+          <div class="no-items" style="grid-column:1/-1;">Cargando…</div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main area -->
+    <main>
+      <div class="apply-bar">
+        <div id="status-bar">Selecciona un look y una foto para aplicar la prueba virtual.</div>
+        <button class="btn btn-accent" id="btnApply" disabled>▶ Aplicar prueba virtual</button>
+      </div>
+
+      <div id="result-area">
+        <div class="spinner" id="spinner"></div>
+        <img id="result-img" alt="Resultado de prueba virtual" />
+        <div class="empty-hint" id="empty-hint">
+          1. Elige un look de la lista de la izquierda<br/>
+          2. Elige una foto de persona<br/>
+          3. Presiona <strong>Aplicar prueba virtual</strong>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script type="module">
+    const state = {
+      selectedLookId: null,
+      selectedFoto: null,
+      looks: [],
+      fotos: [],
+    };
+
+    async function api(path, method = "GET", body = null) {
+      const opts = { method, headers: {} };
+      if (body !== null) {
+        opts.headers["Content-Type"] = "application/json";
+        opts.body = JSON.stringify(body);
+      }
+      const resp = await fetch(path, opts);
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.detail || "Error en API");
+      return data;
+    }
+
+    function setStatus(msg, color = null) {
+      const el = document.getElementById("status-bar");
+      el.textContent = msg;
+      el.style.color = color || "var(--ink2)";
+    }
+
+    function updateApplyButton() {
+      const btn = document.getElementById("btnApply");
+      btn.disabled = !(state.selectedLookId && state.selectedFoto);
+    }
+
+    async function loadLooks() {
+      try {
+        const data = await api("/looks");
+        state.looks = data.looks || [];
+        renderLooks();
+      } catch (e) {
+        document.getElementById("looks-list").innerHTML = `<div class="no-items">Error al cargar looks: ${e.message}</div>`;
+      }
+    }
+
+    function renderLooks() {
+      const container = document.getElementById("looks-list");
+      if (!state.looks.length) {
+        container.innerHTML = `<div class="no-items">No hay looks guardados aún.<br/><a href="/" style="color:var(--accent);">Crear uno en el editor →</a></div>`;
+        return;
+      }
+      container.innerHTML = state.looks.map(look => {
+        const selected = state.selectedLookId === look.look_id ? " selected" : "";
+        const tex = look.texture_path ? look.texture_path.split("/").pop() : "(sin textura)";
+        const model = look.model_path ? look.model_path.split("/").pop() : "(sin modelo)";
+        const date = look.created_at ? new Date(look.created_at * 1000).toLocaleDateString("es") : "";
+        return `
+          <div class="look-card${selected}" onclick="selectLook('${look.look_id}')">
+            <div class="look-name">${escHtml(look.name)}</div>
+            <div class="look-meta">Modelo: ${escHtml(model)}</div>
+            <div class="look-meta">Textura: ${escHtml(tex)}</div>
+            ${look.notes ? `<div class="look-meta">📝 ${escHtml(look.notes)}</div>` : ""}
+            ${date ? `<div class="look-meta">${date}</div>` : ""}
+          </div>`;
+      }).join("");
+    }
+
+    async function loadFotos() {
+      try {
+        const data = await api("/fotos-personas");
+        state.fotos = data.fotos || [];
+        renderFotos();
+      } catch (e) {
+        document.getElementById("fotos-grid").innerHTML = `<div class="no-items">Error: ${e.message}</div>`;
+      }
+    }
+
+    function renderFotos() {
+      const grid = document.getElementById("fotos-grid");
+      if (!state.fotos.length) {
+        grid.innerHTML = `<div class="no-items" style="grid-column:1/-1;">Sin fotos en fotos_personas/</div>`;
+        return;
+      }
+      grid.innerHTML = state.fotos.map(f => {
+        const selected = state.selectedFoto === f.nombre ? " selected" : "";
+        return `
+          <div class="foto-card${selected}" onclick="selectFoto('${escAttr(f.nombre)}')">
+            <img src="${escAttr(f.url)}" alt="${escAttr(f.nombre)}" loading="lazy" />
+            <div class="foto-name">${escHtml(f.nombre)}</div>
+          </div>`;
+      }).join("");
+    }
+
+    window.selectLook = function(lookId) {
+      state.selectedLookId = lookId;
+      renderLooks();
+      updateApplyButton();
+      const look = state.looks.find(l => l.look_id === lookId);
+      setStatus(look ? `Look seleccionado: "${look.name}"` : "Look seleccionado");
+    };
+
+    window.selectFoto = function(nombre) {
+      state.selectedFoto = nombre;
+      renderFotos();
+      updateApplyButton();
+      setStatus(`Foto seleccionada: ${nombre}`);
+    };
+
+    function escHtml(str) {
+      return String(str || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+    }
+    function escAttr(str) {
+      return String(str || "").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+    }
+
+    document.getElementById("btnApply").addEventListener("click", async () => {
+      if (!state.selectedLookId || !state.selectedFoto) return;
+      const spinner = document.getElementById("spinner");
+      const img = document.getElementById("result-img");
+      const hint = document.getElementById("empty-hint");
+      spinner.classList.add("visible");
+      img.classList.remove("visible");
+      hint.style.display = "none";
+      setStatus("Aplicando prueba virtual…");
+      document.getElementById("btnApply").disabled = true;
+
+      try {
+        const data = await api("/tryon/apply", "POST", {
+          look_id: state.selectedLookId,
+          foto_nombre: state.selectedFoto,
+        });
+        spinner.classList.remove("visible");
+        if (data.url) {
+          img.src = `${data.url}?t=${Date.now()}`;
+          img.classList.add("visible");
+          setStatus(`✓ Prueba aplicada sobre "${data.foto}" con look "${data.look_name}"`, "var(--ok)");
+        } else {
+          hint.style.display = "";
+          hint.textContent = `✓ Procesado (estado: ${data.status}). Ruta: ${data.output_path}`;
+          setStatus(`✓ ${data.status}`, "var(--ok)");
+        }
+      } catch (e) {
+        spinner.classList.remove("visible");
+        hint.style.display = "";
+        setStatus(`✗ Error: ${e.message}`, "var(--err)");
+      } finally {
+        updateApplyButton();
+      }
+    });
+
+    // Init
+    await Promise.all([loadLooks(), loadFotos()]);
+  </script>
+</body>
+</html>
