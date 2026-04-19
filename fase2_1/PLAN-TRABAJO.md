@@ -110,16 +110,17 @@ Objetivo:
 
 Tareas:
 
-1. Hardening de API y manejo de errores.
-2. Benchmark de tiempo por imagen.
-3. Documentar limites conocidos y backlog 2.2.
-4. Demo interna con casos representativos.
+1. [x] Hardening de API y manejo de errores.
+2. [x] Benchmark de tiempo por imagen.
+3. [x] Documentar limites conocidos y backlog 2.2.
+4. [x] Demo interna con casos representativos.
 
 Progreso actual Semana 4:
 
 - [x] Migracion de startup API principal a `lifespan` (sin `on_event` deprecado).
 - [x] Script de benchmark de latencia por imagen (`fase2_1/scripts/benchmark_latency.py`).
-- [x] Documentacion de limites conocidos y flujo de fallback en README.
+- [x] Documentacion de limites conocidos, reglas de fallback y backlog 2.2 en README de fase2_1.
+- [x] Demo interna documentada: casos representativos (shirt/dress/pants/skirt) ejecutados con `run_tryon` usando imagenes sinteticas y metricas registradas.
 
 Criterios de aceptacion:
 

@@ -140,36 +140,46 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/rocm5
 
 ### 🧊 3D / Render
 
-* Blender (Python API)
-* trimesh
-* xatlas
+| Herramienta | Para que se usa en el proyecto |
+|---|---|
+| Blender (Python API) | Motor principal de renderizado y exportacion 3D. Se invoca via `blender -b -P` para aplicar texturas a mallas, ejecutar UV unwrap automatico y exportar a GLB/OBJ. |
+| trimesh | Carga, inspeccion y manipulacion de mallas 3D en Python. Permite detectar UV, convertir nubes de puntos a malla proxy y hacer operaciones geometricas sin abrir Blender. |
+| xatlas | Generacion automatica de UV maps sobre mallas sin coordenadas de textura, como paso previo a la aplicacion de texturas generadas. |
 
 ---
 
 ### 🌐 Backend (Docker)
 
-* fastapi
-* uvicorn
-* pydantic
+| Herramienta | Para que se usa en el proyecto |
+|---|---|
+| fastapi | Framework web principal para exponer todos los endpoints REST del sistema: generacion, seleccion, feedback, preview 2D/3D y modelos 3D. |
+| uvicorn | Servidor ASGI de alto rendimiento que ejecuta la aplicacion FastAPI dentro del contenedor Docker. |
+| pydantic | Validacion y serializacion de contratos de datos (schemas de request/response), tambien usado para los contratos internos del pipeline (landmarks_contract, transform_contract). |
 
 ---
 
 ### 🧠 Tracking
 
-* mlflow (Docker)
+| Herramienta | Para que se usa en el proyecto |
+|---|---|
+| mlflow (Docker) | Registro de experimentos de entrenamiento: parametros (l2, feature_dim), metricas (train_mae, train_rmse) y artefactos de modelo. Activado con `MLFLOW_TRACKING_ENABLED=1`. UI disponible en `http://localhost:5000`. |
 
 ---
 
 ### 💾 Almacenamiento
 
-* PostgreSQL (Docker)
-* MinIO (Docker)
+| Herramienta | Para que se usa en el proyecto |
+|---|---|
+| PostgreSQL (Docker) | Base de datos relacional para persistir feedback humano (aprobacion/rechazo), scores por candidato y metricas de proyecto. Con fallback JSONL si no esta disponible. |
+| MinIO (Docker) | Storage de objetos compatible con S3 para guardar texturas generadas, modelos 3D exportados y artefactos de entrenamiento. |
 
 ---
 
 ### 🌐 Frontend
 
-* three.js
+| Herramienta | Para que se usa en el proyecto |
+|---|---|
+| three.js | Visor 3D interactivo en navegador. Carga modelos OBJ/FBX/GLTF, aplica la textura seleccionada y permite rotacion, zoom y paneo sin necesidad de Blender. |
 
 ---
 

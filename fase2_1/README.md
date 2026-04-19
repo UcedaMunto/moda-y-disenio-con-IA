@@ -182,6 +182,23 @@ Limites actuales del MVP 2.1:
 - `run_tryon` aplica composicion por capas cuando `garment_path` es imagen raster (`png/jpg/webp`).
 - Si la prenda no es raster (por ejemplo `.obj`) o falla el render, mantiene fallback placeholder (copia de imagen base).
 - Fallback activo cuando DB no inicializa en startup: la API sigue operativa.
+- El modelo `fit_regression` baseline predice escala de prenda; no predice offset horizontal/vertical (pendiente 2.2).
+- El dataset de segmentacion depende de que existan pares imagen-mascara preexistentes; no genera mascaras automaticamente.
+- MLflow tracking solo se activa con `MLFLOW_TRACKING_ENABLED=1`; en produccion se debe configurar antes de correr el script.
+- La primera corrida de entrenamiento usa 5 muestras sinteticas; para produccion se requiere dataset real de 100+ pares.
+
+### Backlog Fase 2.2
+
+Mejoras identificadas fuera del alcance del MVP 2.1:
+
+| Item | Descripcion |
+|---|---|
+| Prediccion de offset | Extender `fit_regression` para predecir tambien offset X/Y, no solo escala. |
+| Dataset real de segmentacion | Recolectar y etiquetar pares imagen/mascara de personas reales con prendas. |
+| Fine-tuning de segmentacion | Usar el dataset preparado por `prepare_segmentation_dataset.py` para ajustar el modelo de segmentacion. |
+| Deformacion de tela | Aplicar warp o thin-plate spline sobre la prenda antes de componer, para simular como cae la tela. |
+| Inferencia en video | Extender el pipeline para procesar secuencias de frames con consistencia temporal. |
+| Evaluacion humana automatizada | Integrar formulario de evaluacion Web con guardado automatico en PostgreSQL/MLflow. |
 
 ```mermaid
 flowchart TD
