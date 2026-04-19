@@ -82,7 +82,7 @@ Objetivo:
 
 Tareas:
 
-1. Pipeline de datos para fine-tuning de segmentacion.
+1. [x] Pipeline de datos para fine-tuning de segmentacion.
 2. Estructura de entrenamiento de ajuste geometrico (fit_regression).
 3. Registro de experimentos con MLflow.
 4. Primer experimento entrenado reproducible.
@@ -91,6 +91,11 @@ Criterios de aceptacion:
 
 1. Al menos 1 corrida completa de entrenamiento registrada.
 2. Mejora medible en metrica acordada.
+
+Progreso actual Semana 3:
+
+- [x] Script reproducible para pairing/split de dataset de segmentacion (`prepare_segmentation_dataset.py`).
+- [x] Manifests train/val/test en JSONL + `manifest.json` de trazabilidad.
 
 ---
 

@@ -50,6 +50,17 @@ python fase2_1/scripts/prepare_validation_dataset.py \
    --min-images 20 \
    --max-images 50
 
+# Preparar dataset de entrenamiento para segmentación (Semana 3)
+python fase2_1/scripts/prepare_segmentation_dataset.py \
+   --images-dir data/raw/fase2_1_seg/images \
+   --masks-dir data/raw/fase2_1_seg/masks \
+   --output-dir data/processed/fase2_1_train/segmentation \
+   --train-ratio 0.8 \
+   --val-ratio 0.1 \
+   --test-ratio 0.1 \
+   --seed 42 \
+   --strict
+
 # Benchmark de latencia (Semana 4)
 python fase2_1/scripts/benchmark_latency.py \
    --input-dir data/raw/personas \
@@ -63,6 +74,11 @@ Metrica de validez visual manual:
 - `GET /fase2_1/tryon/evaluate-summary` acepta `valid_score_threshold` (default `85.0`).
 - `visually_valid_rate` = casos con `score >= valid_score_threshold` sobre total manual.
 - Criterio de aceptacion Semana 4: `manual_visually_valid_rate >= 90.0`.
+
+Salida del pipeline de datos de segmentacion:
+
+- `manifest.json` con conteos, ratios y trazabilidad del split.
+- `train.jsonl`, `val.jsonl`, `test.jsonl` con pares `image_path` + `mask_path`.
 
 Diagrama PUML completo del flujo trabajado:
 
