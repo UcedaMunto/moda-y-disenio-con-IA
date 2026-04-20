@@ -74,6 +74,13 @@
     .stat-row { display:flex; justify-content:space-between; font-size:0.78rem; color:var(--muted); padding:2px 0; }
     .stat-row strong { color:var(--ink); }
     .hidden { display:none !important; }
+    .field { display:flex; flex-direction:column; gap:4px; }
+    .field input { background:var(--surface-2); color:var(--ink); border:1px solid var(--border); border-radius:6px; padding:5px 8px; font-size:0.82rem; width:100%; }
+    .metrics-box { font-size:0.78rem; color:var(--muted); line-height:1.5; }
+    .legend { display:flex; gap:8px; flex-wrap:wrap; }
+    .legend .item { font-size:0.74rem; border:1px solid var(--border); border-radius:999px; padding:2px 8px; }
+    .pill-target { border-color:#57c785 !important; color:#57c785; }
+    .pill-proposal { border-color:#5fd6ff !important; color:#5fd6ff; }
   </style>
 </head>
 <body>
@@ -109,9 +116,27 @@
       <div class="toolbar">
         <button class="btn" id="btnModeSketch" title="Modo anotación: mueve los puntos del esqueleto">✏️ Anotar</button>
         <button class="btn" id="btnModeReview" title="Modo revisión: acepta/rechaza partes">🔍 Revisar</button>
+        <button class="btn" id="btnModeCompare" title="Compara objetivo guardado vs propuesta IA">⚖️ Comparar IA</button>
+        <div class="field" style="min-width: 220px; margin-left: 8px;">
+          <label for="poseBackendSelect" class="info-text">Modelo de pose</label>
+          <select id="poseBackendSelect" title="Selecciona el backend de pose para estimación/propuesta">
+            <option value="legacy">Actual (legacy)</option>
+            <option value="landmarker">Google Pose Landmarker</option>
+            <option value="both">Google + fallback legacy</option>
+          </select>
+        </div>
+        <label class="info-text" style="display:flex;align-items:center;gap:6px; margin-left: 8px; white-space: nowrap;">
+          <input type="checkbox" id="applyRefinerCheck" checked />
+          Aplicar refinador entrenado
+        </label>
         <span style="flex:1;"></span>
+        <button class="btn" id="btnLoadProposal" disabled>Ver propuesta IA</button>
         <button class="btn" id="btnLoadAuto" disabled>⟳ Cargar estimación automática</button>
         <button class="btn primary" id="btnSaveKp" disabled>💾 Guardar</button>
+      </div>
+      <div class="legend hidden" style="margin-top:8px;" id="compareLegend">
+        <span class="item pill-target">Objetivo guardado</span>
+        <span class="item pill-proposal">Propuesta IA</span>
       </div>
     </div>
 
@@ -146,6 +171,29 @@
       </div>
       <div id="trainingInfo" class="info-text" style="margin-top:8px;">Sin entrenar.</div>
     </div>
+
+    <div class="card">
+      <div class="section-title">Ciclo iterativo IA</div>
+      <div class="toolbar" style="flex-direction:column; align-items:stretch; gap:6px;">
+        <button class="btn" id="btnSnapshotObjective">1) Guardar objetivo actual</button>
+        <div class="field">
+          <label for="iterateEpochs" class="info-text">Epocas por corrida</label>
+          <input id="iterateEpochs" type="number" min="1" max="20" step="1" value="1" />
+        </div>
+        <div class="field">
+          <label for="iterateLr" class="info-text">Learning rate</label>
+          <input id="iterateLr" type="number" min="0.01" max="1" step="0.01" value="0.25" />
+        </div>
+        <button class="btn primary" id="btnIterate">2) Correr ciclo iterativo</button>
+        <button class="btn" id="btnSaveModelCheckpoint">3) Guardar modelo actual</button>
+      </div>
+      <div id="iterateInfo" class="metrics-box" style="margin-top:8px;">Aun sin corridas iterativas desde UI.</div>
+    </div>
+
+    <div class="card">
+      <div class="section-title">Comparacion Objetivo vs IA</div>
+      <div id="proposalInfo" class="metrics-box">Selecciona una muestra y presiona "Ver propuesta IA".</div>
+    </div>
   </div>
 </div>
 
@@ -163,7 +211,7 @@ const PARTS_META = null; // loaded from API
 // State
 // ============================================================
 const state = {
-  mode: 'sketch',          // 'sketch' | 'review'
+  mode: 'sketch',          // 'sketch' | 'review' | 'compare'
   samples: [],
   selectedSample: null,
   parts: [],               // BODY_PARTS_SEGMENTS from API
@@ -179,6 +227,12 @@ const state = {
   photoNativeH: 1,
   displayScale: 1,         // photo display scale (canvas CSS vs native)
   dirty: false,
+  proposalKp: null,
+  targetKp: null,
+  proposalMetrics: null,
+  proposalMeta: null,
+  poseBackend: localStorage.getItem('humanShapePoseBackend') || 'legacy',
+  applyRefiner: localStorage.getItem('humanShapeApplyRefiner') !== '0',
 };
 
 // ============================================================
@@ -191,6 +245,17 @@ function setStatus(msg, color = 'var(--muted)') {
   const el = document.getElementById('statusBar');
   el.textContent = msg;
   el.style.color = color;
+}
+
+function getPoseBackendQuery() {
+  const backend = encodeURIComponent(state.poseBackend || 'legacy');
+  return `pose_backend=${backend}`;
+}
+
+function getProposalQuery() {
+  const backend = encodeURIComponent(state.poseBackend || 'legacy');
+  const applyRefiner = state.applyRefiner ? '1' : '0';
+  return `pose_backend=${backend}&apply_refiner=${applyRefiner}`;
 }
 
 function escHtml(s) {
@@ -219,6 +284,16 @@ async function api(path, method = 'GET', body = null) {
 // ============================================================
 async function init() {
   try {
+    const sel = document.getElementById('poseBackendSelect');
+    const refinerCheck = document.getElementById('applyRefinerCheck');
+    if (sel) {
+      const allowed = new Set(['legacy', 'landmarker', 'both']);
+      if (!allowed.has(state.poseBackend)) state.poseBackend = 'legacy';
+      sel.value = state.poseBackend;
+    }
+    if (refinerCheck) {
+      refinerCheck.checked = !!state.applyRefiner;
+    }
     const [partsResp, statusResp] = await Promise.all([
       api('/human-shape-lab/parts'),
       api('/human-shape-lab/status'),
@@ -243,6 +318,8 @@ function applyStatus(data) {
     <div class="stat-row"><span>Muestras</span><strong>${lab.samples_total ?? 0}</strong></div>
     <div class="stat-row"><span>Corregidas</span><strong>${lab.corrected_total ?? 0}</strong></div>
     <div class="stat-row"><span>Modelo</span><strong>${escHtml(lab.model_config_path ? '✓ entrenado' : 'sin entrenar')}</strong></div>
+    <div class="stat-row"><span>Objetivo</span><strong>${escHtml(lab.objective_snapshot_path ? '✓ snapshot' : 'sin snapshot')}</strong></div>
+    <div class="stat-row"><span>Refinador IA</span><strong>${escHtml(lab.keypoint_refiner_path ? '✓ listo' : 'sin refinar')}</strong></div>
   `;
   const hasSamples = (lab.samples_total ?? 0) > 0;
   document.getElementById('btnTrain').disabled = !hasSamples;
@@ -299,10 +376,15 @@ async function loadSample(sampleId) {
     state.acceptedParts = new Set(sample.accepted_parts || []);
     state.rejectedParts = new Set(sample.rejected_parts || []);
     state.dirty = false;
+    state.proposalKp = null;
+    state.targetKp = deepCopy(state.kp);
+    state.proposalMetrics = null;
+    state.proposalMeta = null;
 
     resizeCanvas();
     redraw();
     renderPartList();
+    renderProposalInfo();
     updateButtonStates();
     setStatus(`${sample.image_name} — fuente: ${kpResp.source}`, 'var(--ok)');
   } catch (e) {
@@ -377,82 +459,96 @@ function redraw() {
 
   if (!Object.keys(state.kp).length) return;
 
-  // Draw segments
-  for (const part of state.parts) {
-    const a = state.kp[part.kp_a];
-    const b = state.kp[part.kp_b];
-    if (!a || !b) continue;
-    if (!a.visible || !b.visible) continue;
+  const drawSkeleton = (kpMap, opts = {}) => {
+    const {
+      alpha = 0.8,
+      dashed = false,
+      strokeOverride = null,
+      withPoints = true,
+    } = opts;
+    if (!kpMap) return;
 
-    const ca = normToCanvas(a.x, a.y);
-    const cb = normToCanvas(b.x, b.y);
+    for (const part of state.parts) {
+      const a = kpMap[part.kp_a];
+      const b = kpMap[part.kp_b];
+      if (!a || !b || !a.visible || !b.visible) continue;
 
-    const isSelected = state.selectedPart === part.id;
-    const isAccepted = state.acceptedParts.has(part.id);
-    const isRejected = state.rejectedParts.has(part.id);
+      const ca = normToCanvas(a.x, a.y);
+      const cb = normToCanvas(b.x, b.y);
+      const isSelected = state.selectedPart === part.id;
+      const isAccepted = state.acceptedParts.has(part.id);
+      const isRejected = state.rejectedParts.has(part.id);
 
-    let strokeColor = part.color;
-    let lineWidth = 3;
-    let alpha = 0.75;
-
-    if (isSelected) { lineWidth = 5; alpha = 1.0; }
-    if (isAccepted) { strokeColor = '#57c785'; alpha = 0.9; }
-    if (isRejected) { strokeColor = '#f06d6d'; alpha = 0.9; lineWidth = 4; }
-
-    ctx.save();
-    ctx.globalAlpha = alpha;
-    ctx.strokeStyle = strokeColor;
-    ctx.lineWidth = lineWidth;
-    ctx.lineCap = 'round';
-    ctx.shadowColor = '#000';
-    ctx.shadowBlur = 4;
-    ctx.beginPath();
-    ctx.moveTo(ca.x, ca.y);
-    ctx.lineTo(cb.x, cb.y);
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  // Draw keypoints
-  const renderedKp = new Set();
-  for (const part of state.parts) {
-    for (const kpName of [part.kp_a, part.kp_b]) {
-      if (renderedKp.has(kpName)) continue;
-      renderedKp.add(kpName);
-      const kp = state.kp[kpName];
-      if (!kp) continue;
-      const cp = normToCanvas(kp.x, kp.y);
-      const isDragging = state.dragKp === kpName;
-      const isPartKp = state.selectedPart &&
-        state.parts.find(p => p.id === state.selectedPart &&
-          (p.kp_a === kpName || p.kp_b === kpName));
+      let strokeColor = strokeOverride || part.color;
+      let lineWidth = 3;
+      if (isSelected && kpMap === state.kp) lineWidth = 5;
+      if (isAccepted && kpMap === state.kp) strokeColor = '#57c785';
+      if (isRejected && kpMap === state.kp) { strokeColor = '#f06d6d'; lineWidth = 4; }
 
       ctx.save();
-      ctx.beginPath();
-      ctx.arc(cp.x, cp.y, isDragging ? KP_RADIUS + 3 : KP_RADIUS, 0, Math.PI * 2);
-      ctx.fillStyle = isPartKp ? '#fff' : (kp.optional ? '#555' : '#222');
-      ctx.strokeStyle = isPartKp ? '#fff' : partColor(
-        state.parts.find(p => p.kp_a === kpName || p.kp_b === kpName)?.id || '__'
-      );
-      ctx.lineWidth = 2;
+      ctx.globalAlpha = alpha;
+      ctx.strokeStyle = strokeColor;
+      ctx.lineWidth = lineWidth;
+      if (dashed) ctx.setLineDash([7, 5]);
+      ctx.lineCap = 'round';
       ctx.shadowColor = '#000';
-      ctx.shadowBlur = 6;
-      ctx.fill();
+      ctx.shadowBlur = 4;
+      ctx.beginPath();
+      ctx.moveTo(ca.x, ca.y);
+      ctx.lineTo(cb.x, cb.y);
       ctx.stroke();
       ctx.restore();
+    }
 
-      // Label on hover / selected
-      if (isPartKp || isDragging) {
+    if (!withPoints) return;
+
+    const renderedKp = new Set();
+    for (const part of state.parts) {
+      for (const kpName of [part.kp_a, part.kp_b]) {
+        if (renderedKp.has(kpName)) continue;
+        renderedKp.add(kpName);
+        const kp = kpMap[kpName];
+        if (!kp) continue;
+        const cp = normToCanvas(kp.x, kp.y);
+        const isDragging = state.dragKp === kpName;
+        const isPartKp = state.selectedPart &&
+          state.parts.find(p => p.id === state.selectedPart &&
+            (p.kp_a === kpName || p.kp_b === kpName));
+
         ctx.save();
-        ctx.font = '11px system-ui';
-        ctx.fillStyle = '#fff';
+        ctx.beginPath();
+        ctx.arc(cp.x, cp.y, isDragging ? KP_RADIUS + 3 : KP_RADIUS, 0, Math.PI * 2);
+        ctx.fillStyle = isPartKp ? '#fff' : (kp.optional ? '#555' : '#222');
+        ctx.strokeStyle = strokeOverride || (isPartKp ? '#fff' : partColor(
+          state.parts.find(p => p.kp_a === kpName || p.kp_b === kpName)?.id || '__'
+        ));
+        ctx.lineWidth = 2;
         ctx.shadowColor = '#000';
-        ctx.shadowBlur = 4;
-        ctx.fillText(kpName.replace(/_/g, ' '), cp.x + KP_RADIUS + 3, cp.y + 4);
+        ctx.shadowBlur = 6;
+        ctx.fill();
+        ctx.stroke();
         ctx.restore();
+
+        if (isPartKp || isDragging) {
+          ctx.save();
+          ctx.font = '11px system-ui';
+          ctx.fillStyle = '#fff';
+          ctx.shadowColor = '#000';
+          ctx.shadowBlur = 4;
+          ctx.fillText(kpName.replace(/_/g, ' '), cp.x + KP_RADIUS + 3, cp.y + 4);
+          ctx.restore();
+        }
       }
     }
+  };
+
+  if (state.mode === 'compare') {
+    drawSkeleton(state.targetKp || state.kp, { alpha: 0.9, strokeOverride: '#57c785', withPoints: false });
+    drawSkeleton(state.proposalKp, { alpha: 0.9, strokeOverride: '#5fd6ff', dashed: true, withPoints: false });
+    return;
   }
+
+  drawSkeleton(state.kp, { alpha: 0.8, withPoints: true });
 }
 
 // ============================================================
@@ -540,22 +636,155 @@ function renderReviewButtons() {
 function renderModeUI() {
   const ind = document.getElementById('modeIndicator');
   const reviewActions = document.getElementById('reviewActions');
+  const compareLegend = document.getElementById('compareLegend');
   if (state.mode === 'sketch') {
     ind.textContent = 'Anotar';
     ind.className = 'mode-indicator sketch';
     reviewActions.classList.add('hidden');
+    compareLegend.classList.add('hidden');
     document.getElementById('btnModeSketch').style.borderColor = 'var(--accent)';
     document.getElementById('btnModeReview').style.borderColor = '';
-  } else {
+    document.getElementById('btnModeCompare').style.borderColor = '';
+  } else if (state.mode === 'review') {
     ind.textContent = 'Revisar';
     ind.className = 'mode-indicator review';
     reviewActions.classList.remove('hidden');
+    compareLegend.classList.add('hidden');
     document.getElementById('btnModeSketch').style.borderColor = '';
     document.getElementById('btnModeReview').style.borderColor = 'var(--warn)';
+    document.getElementById('btnModeCompare').style.borderColor = '';
     renderReviewButtons();
+  } else {
+    ind.textContent = 'Comparar';
+    ind.className = 'mode-indicator review';
+    reviewActions.classList.add('hidden');
+    compareLegend.classList.remove('hidden');
+    document.getElementById('btnModeSketch').style.borderColor = '';
+    document.getElementById('btnModeReview').style.borderColor = '';
+    document.getElementById('btnModeCompare').style.borderColor = 'var(--accent)';
   }
   renderPartList();
   redraw();
+}
+
+function renderProposalInfo() {
+  const box = document.getElementById('proposalInfo');
+  const m = state.proposalMetrics;
+  const proposalMeta = state.proposalMeta || {};
+  const arm = proposalMeta.arm_pose || {};
+  const catalog = arm.catalog_recognition || {};
+  const topPose = catalog.top || null;
+  const top3 = (catalog.candidates || []).slice(0, 3);
+  const leg = proposalMeta.leg_pose || {};
+  const legCatalog = leg.catalog_recognition || {};
+  const topLegPose = legCatalog.top || null;
+  const topLeg3 = (legCatalog.candidates || []).slice(0, 3);
+  if (!m) {
+    box.innerHTML = 'Sin comparacion aun. Carga una propuesta IA para esta muestra.';
+    return;
+  }
+  const worst = (m.worst_parts || []).slice(0, 4).map(w => `${w.part}: ${Number(w.l2 || 0).toFixed(4)}`).join('<br/>');
+  const topPoseHtml = topPose
+    ? `${escHtml(topPose.label || topPose.id)} <span style="color:var(--muted)">(${escHtml(topPose.frequency || 'desconocida')}, score=${Number(topPose.score || 0).toFixed(2)})</span>`
+    : 'n/a';
+  const top3Html = top3.length
+    ? top3.map(c => `${escHtml(c.label || c.id)} <span style="color:var(--muted)">(${escHtml(c.frequency || 'desconocida')}, ${Number(c.score || 0).toFixed(2)})</span>`).join('<br/>')
+    : 'n/a';
+  const topLegPoseHtml = topLegPose
+    ? `${escHtml(topLegPose.label || topLegPose.id)} <span style="color:var(--muted)">(${escHtml(topLegPose.frequency || 'desconocida')}, score=${Number(topLegPose.score || 0).toFixed(2)})</span>`
+    : 'n/a';
+  const topLeg3Html = topLeg3.length
+    ? topLeg3.map(c => `${escHtml(c.label || c.id)} <span style="color:var(--muted)">(${escHtml(c.frequency || 'desconocida')}, ${Number(c.score || 0).toFixed(2)})</span>`).join('<br/>')
+    : 'n/a';
+  box.innerHTML = `
+    mean_l2: <strong>${Number(m.mean_l2 || 0).toFixed(4)}</strong><br/>
+    pck_0_05: <strong>${Number(m.pck_0_05 || 0).toFixed(4)}</strong><br/>
+    keypoints evaluados: <strong>${m.keypoints_evaluated || 0}</strong><br/>
+    pose brazos (top-1): <strong>${topPoseHtml}</strong><br/>
+    <div style="margin-top:6px;">Top-3 poses de brazos:<br/>${top3Html}</div>
+    pose piernas/pies (top-1): <strong>${topLegPoseHtml}</strong><br/>
+    <div style="margin-top:6px;">Top-3 poses de piernas/pies:<br/>${topLeg3Html}</div>
+    <div style="margin-top:6px;">Peores partes:<br/>${worst || 'n/a'}</div>
+  `;
+}
+
+async function loadProposal() {
+  if (!state.selectedSample) return;
+  setStatus('Generando propuesta IA y comparando contra objetivo...');
+  try {
+    const data = await api(`/human-shape-lab/samples/${state.selectedSample.sample_id}/proposal?${getProposalQuery()}`);
+    state.proposalKp = deepCopy(data.proposal_keypoints || {});
+    state.targetKp = deepCopy(data.target_keypoints || state.kp);
+    state.proposalMetrics = data.metrics || null;
+    state.proposalMeta = data.proposal_meta || null;
+    renderProposalInfo();
+    state.mode = 'compare';
+    renderModeUI();
+    setStatus(`Comparacion lista (${state.poseBackend}, refiner=${state.applyRefiner ? 'on' : 'off'}). mean_l2=${Number(state.proposalMetrics?.mean_l2 || 0).toFixed(4)}`, 'var(--ok)');
+  } catch (e) {
+    setStatus(`Error al cargar propuesta: ${e.message}`, 'var(--err)');
+  }
+}
+
+async function snapshotObjective() {
+  setStatus('Guardando snapshot objetivo (puntos corregidos)...');
+  try {
+    const data = await api('/human-shape-lab/objective/snapshot', 'POST', {});
+    const sr = await api('/human-shape-lab/status');
+    applyStatus(sr);
+    setStatus(`Objetivo guardado: ${data.samples_total} muestras`, 'var(--ok)');
+  } catch (e) {
+    setStatus(`Error snapshot objetivo: ${e.message}`, 'var(--err)');
+  }
+}
+
+async function runIterativeCycle() {
+  const epochs = Number(document.getElementById('iterateEpochs').value || 1);
+  const learningRate = Number(document.getElementById('iterateLr').value || 0.25);
+  setStatus(`Corriendo ciclo iterativo (${epochs} epoca(s))...`);
+  try {
+    const data = await api('/human-shape-lab/keypoints/iterate', 'POST', {
+      epochs,
+      learning_rate: learningRate,
+      use_objective_snapshot: true,
+      reset_model: false,
+    });
+    const rep = (data.epoch_reports || [])[data.epoch_reports.length - 1] || {};
+    document.getElementById('iterateInfo').innerHTML = `
+      muestras objetivo: <strong>${data.objective_samples || 0}</strong><br/>
+      mean_l2_before: <strong>${Number(rep.mean_l2_before || 0).toFixed(4)}</strong><br/>
+      mean_l2_after: <strong>${Number(rep.mean_l2_after || 0).toFixed(4)}</strong><br/>
+      mejora: <strong>${Number(rep.improvement || 0).toFixed(4)}</strong>
+    `;
+    const sr = await api('/human-shape-lab/status');
+    applyStatus(sr);
+    if (state.selectedSample) {
+      await loadProposal();
+    }
+    setStatus('Ciclo iterativo completado ✓', 'var(--ok)');
+  } catch (e) {
+    setStatus(`Error en ciclo iterativo: ${e.message}`, 'var(--err)');
+  }
+}
+
+async function saveModelCheckpoint() {
+  setStatus('Guardando checkpoint del modelo actual...');
+  try {
+    const nameInput = window.prompt('Nombre del checkpoint (opcional):', 'manual_ui');
+    const payload = {
+      include_objective_snapshot: true,
+    };
+    if (nameInput !== null && String(nameInput).trim()) {
+      payload.name = String(nameInput).trim();
+    }
+    const data = await api('/human-shape-lab/model/save', 'POST', payload);
+    const ckpt = data.checkpoint || {};
+    const prev = document.getElementById('iterateInfo').innerHTML;
+    document.getElementById('iterateInfo').innerHTML = `${prev}<br/>checkpoint: <strong>${escHtml(ckpt.checkpoint_dir || 'n/a')}</strong>`;
+    setStatus('Checkpoint guardado ✓', 'var(--ok)');
+  } catch (e) {
+    setStatus(`Error al guardar checkpoint: ${e.message}`, 'var(--err)');
+  }
 }
 
 // ============================================================
@@ -581,7 +810,7 @@ function findKpUnderPointer(px, py) {
 }
 
 canvas.addEventListener('pointerdown', e => {
-  if (!state.photo || state.mode === 'review') return;
+  if (!state.photo || state.mode === 'review' || state.mode === 'compare') return;
   const { x, y } = pointerOnCanvas(e);
   const hit = findKpUnderPointer(x, y);
   if (hit) {
@@ -672,13 +901,13 @@ async function loadAutoEstimate() {
   if (!state.selectedSample) return;
   setStatus('Cargando estimación automática...');
   try {
-    const kpResp = await api(`/human-shape-lab/samples/${state.selectedSample.sample_id}/keypoints?force_auto=1`);
+    const kpResp = await api(`/human-shape-lab/samples/${state.selectedSample.sample_id}/keypoints?force_auto=1&${getPoseBackendQuery()}`);
     // Note: backend always returns geometric/mediapipe if no saved version, but we pass force to re-estimate
     state.kp = deepCopy(kpResp.keypoints || {});
     state.dirty = true;
     redraw();
     updateButtonStates();
-    setStatus(`Estimación cargada (${kpResp.source})`, 'var(--warn)');
+    setStatus(`Estimación cargada (${kpResp.source}, ${state.poseBackend})`, 'var(--warn)');
   } catch (e) {
     setStatus(`Error: ${e.message}`, 'var(--err)');
   }
@@ -726,9 +955,10 @@ async function refreshAutoMask() {
 // ============================================================
 function updateButtonStates() {
   const hasSample = !!state.selectedSample;
-  document.getElementById('btnSaveKp').disabled = !hasSample || !state.dirty;
+  document.getElementById('btnSaveKp').disabled = !hasSample || !state.dirty || state.mode === 'compare';
   document.getElementById('btnLoadAuto').disabled = !hasSample;
   document.getElementById('btnRefreshAuto').disabled = !hasSample;
+  document.getElementById('btnLoadProposal').disabled = !hasSample;
 }
 
 // ============================================================
@@ -757,15 +987,41 @@ document.getElementById('btnReload').addEventListener('click', async () => {
 document.getElementById('btnModeSketch').addEventListener('click', () => {
   state.mode = 'sketch';
   renderModeUI();
+  updateButtonStates();
 });
 document.getElementById('btnModeReview').addEventListener('click', () => {
   state.mode = 'review';
   renderModeUI();
+  updateButtonStates();
 });
+document.getElementById('btnModeCompare').addEventListener('click', () => {
+  state.mode = 'compare';
+  renderModeUI();
+  updateButtonStates();
+});
+document.getElementById('btnLoadProposal').addEventListener('click', loadProposal);
 document.getElementById('btnSaveKp').addEventListener('click', saveKeypoints);
 document.getElementById('btnLoadAuto').addEventListener('click', loadAutoEstimate);
 document.getElementById('btnTrain').addEventListener('click', trainModel);
 document.getElementById('btnRefreshAuto').addEventListener('click', refreshAutoMask);
+document.getElementById('btnSnapshotObjective').addEventListener('click', snapshotObjective);
+document.getElementById('btnIterate').addEventListener('click', runIterativeCycle);
+document.getElementById('btnSaveModelCheckpoint').addEventListener('click', saveModelCheckpoint);
+document.getElementById('poseBackendSelect').addEventListener('change', async (e) => {
+  const val = String(e.target?.value || 'legacy');
+  state.poseBackend = val;
+  localStorage.setItem('humanShapePoseBackend', val);
+  setStatus(`Modelo de pose seleccionado: ${val}`, 'var(--accent)');
+  if (state.selectedSample) {
+    await loadAutoEstimate();
+  }
+});
+
+document.getElementById('applyRefinerCheck').addEventListener('change', (e) => {
+  state.applyRefiner = !!e.target?.checked;
+  localStorage.setItem('humanShapeApplyRefiner', state.applyRefiner ? '1' : '0');
+  setStatus(`Refinador entrenado: ${state.applyRefiner ? 'activado' : 'desactivado'}`, 'var(--accent)');
+});
 
 window.addEventListener('resize', () => {
   if (state.photo) { resizeCanvas(); redraw(); }

@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import time
+import urllib.request
 from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field
 from fastapi.responses import FileResponse
@@ -1447,6 +1448,22 @@ class HumanShapeIterativeTrainRequest(BaseModel):
     learning_rate: float = Field(default=0.35, ge=0.001, le=1.0)
     reset_model: bool = False
     use_objective_snapshot: bool = True
+    update_only_erroneous_sections: bool = True
+    section_error_threshold: float = Field(default=0.03, ge=0.0, le=1.0)
+    enable_golden_ratio_prior: bool = True
+    golden_ratio_alpha: float = Field(default=0.35, ge=0.0, le=1.0)
+    enable_arm_pose_prior: bool = True
+    arm_pose_alpha: float = Field(default=0.40, ge=0.0, le=1.0)
+    enable_leg_pose_prior: bool = True
+    leg_pose_alpha: float = Field(default=0.35, ge=0.0, le=1.0)
+    enable_arm_pose_curriculum: bool = True
+    curriculum_start_fraction: float = Field(default=0.35, ge=0.1, le=1.0)
+
+
+class HumanShapeSaveModelRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    name: str | None = None
+    include_objective_snapshot: bool = True
 
 
 # ---------------------------------------------------------------------------
@@ -1571,6 +1588,150 @@ def _mediapipe_keypoints(image_path: Path) -> dict[str, dict] | None:
         return None
 
 
+def _human_shape_pose_landmarker_model_path() -> Path:
+    return _human_shape_lab_dirs()["models"] / "pose_landmarker_lite.task"
+
+
+def _ensure_pose_landmarker_model() -> Path | None:
+    """Ensure pose landmarker task model exists (download once if missing)."""
+    model_path = _human_shape_pose_landmarker_model_path()
+    if model_path.exists() and model_path.stat().st_size > 0:
+        return model_path
+
+    url = (
+        "https://storage.googleapis.com/mediapipe-models/pose_landmarker/"
+        "pose_landmarker_lite/float16/latest/pose_landmarker_lite.task"
+    )
+    try:
+        model_path.parent.mkdir(parents=True, exist_ok=True)
+        with urllib.request.urlopen(url, timeout=30) as resp:
+            data = resp.read()
+        if not data:
+            return None
+        model_path.write_bytes(data)
+        return model_path
+    except Exception:
+        return None
+
+
+def _mediapipe_landmarker_keypoints(image_path: Path) -> tuple[dict[str, dict] | None, dict]:
+    """Try MediaPipe Pose Landmarker (Tasks API) as an isolated second backend."""
+    try:
+        import mediapipe as mp  # type: ignore
+
+        model_path = _ensure_pose_landmarker_model()
+        if model_path is None or not model_path.exists():
+            return None, {"strategy": "mediapipe_pose_landmarker", "reason": "model_unavailable"}
+
+        BaseOptions = mp.tasks.BaseOptions
+        PoseLandmarker = mp.tasks.vision.PoseLandmarker
+        PoseLandmarkerOptions = mp.tasks.vision.PoseLandmarkerOptions
+        RunningMode = mp.tasks.vision.RunningMode
+
+        options = PoseLandmarkerOptions(
+            base_options=BaseOptions(model_asset_path=str(model_path)),
+            running_mode=RunningMode.IMAGE,
+            num_poses=1,
+            min_pose_detection_confidence=0.45,
+            min_pose_presence_confidence=0.45,
+            min_tracking_confidence=0.45,
+            output_segmentation_masks=False,
+        )
+
+        mp_image = mp.Image.create_from_file(str(image_path))
+        with PoseLandmarker.create_from_options(options) as landmarker:
+            result = landmarker.detect(mp_image)
+
+        if not result or not getattr(result, "pose_landmarks", None):
+            return None, {"strategy": "mediapipe_pose_landmarker", "reason": "no_pose"}
+
+        poses = result.pose_landmarks
+        if not poses:
+            return None, {"strategy": "mediapipe_pose_landmarker", "reason": "empty_pose_list"}
+        lm = poses[0]
+
+        def pt(idx: int, vis_thresh: float = 0.4) -> dict:
+            p = lm[idx]
+            vis = float(getattr(p, "visibility", 1.0))
+            pres = float(getattr(p, "presence", 1.0))
+            return {
+                "x": float(p.x),
+                "y": float(p.y),
+                "visible": (vis >= vis_thresh) and (pres >= 0.3),
+                "optional": False,
+            }
+
+        # BlazePose landmark indices.
+        NOSE = 0
+        LEFT_MOUTH = 9
+        RIGHT_MOUTH = 10
+        LEFT_SHOULDER = 11
+        RIGHT_SHOULDER = 12
+        LEFT_ELBOW = 13
+        RIGHT_ELBOW = 14
+        LEFT_WRIST = 15
+        RIGHT_WRIST = 16
+        LEFT_HIP = 23
+        RIGHT_HIP = 24
+        LEFT_KNEE = 25
+        RIGHT_KNEE = 26
+        LEFT_ANKLE = 27
+        RIGHT_ANKLE = 28
+        LEFT_INDEX = 19
+        RIGHT_INDEX = 20
+        LEFT_FOOT_INDEX = 31
+        RIGHT_FOOT_INDEX = 32
+
+        kp = {
+            "crown": {
+                "x": float(lm[NOSE].x),
+                "y": max(0.0, float(lm[NOSE].y) - 0.08),
+                "visible": True,
+                "optional": False,
+            },
+            "chin": {
+                "x": float((lm[LEFT_MOUTH].x + lm[RIGHT_MOUTH].x) / 2),
+                "y": float(max(lm[LEFT_MOUTH].y, lm[RIGHT_MOUTH].y)),
+                "visible": True,
+                "optional": False,
+            },
+            "neck_base": {
+                "x": float((lm[LEFT_SHOULDER].x + lm[RIGHT_SHOULDER].x) / 2),
+                "y": float((lm[LEFT_SHOULDER].y + lm[RIGHT_SHOULDER].y) / 2),
+                "visible": True,
+                "optional": False,
+            },
+            "left_shoulder": pt(LEFT_SHOULDER),
+            "right_shoulder": pt(RIGHT_SHOULDER),
+            "left_elbow": pt(LEFT_ELBOW),
+            "right_elbow": pt(RIGHT_ELBOW),
+            "left_wrist": pt(LEFT_WRIST),
+            "right_wrist": pt(RIGHT_WRIST),
+            "left_hand_tip": {**pt(LEFT_INDEX), "optional": True},
+            "right_hand_tip": {**pt(RIGHT_INDEX), "optional": True},
+            "hip_center": {
+                "x": float((lm[LEFT_HIP].x + lm[RIGHT_HIP].x) / 2),
+                "y": float((lm[LEFT_HIP].y + lm[RIGHT_HIP].y) / 2),
+                "visible": True,
+                "optional": False,
+            },
+            "left_hip": pt(LEFT_HIP),
+            "right_hip": pt(RIGHT_HIP),
+            "left_knee": pt(LEFT_KNEE),
+            "right_knee": pt(RIGHT_KNEE),
+            "left_ankle": pt(LEFT_ANKLE),
+            "right_ankle": pt(RIGHT_ANKLE),
+            "left_toe": {**pt(LEFT_FOOT_INDEX), "optional": True},
+            "right_toe": {**pt(RIGHT_FOOT_INDEX), "optional": True},
+        }
+        return kp, {
+            "strategy": "mediapipe_pose_landmarker",
+            "model_path": _to_repo_relative(model_path),
+        }
+    except Exception as exc:
+        return None, {"strategy": "mediapipe_pose_landmarker", "reason": f"error:{exc}"}
+
+
 def _look_manifest_path(look_id: str) -> Path:
     return LOOKS_DIR / look_id / "manifest.json"
 
@@ -1601,6 +1762,43 @@ def _human_shape_objective_snapshot_path() -> Path:
 
 def _human_shape_keypoint_refiner_path() -> Path:
     return _human_shape_lab_dirs()["models"] / "keypoint_refiner_v1.json"
+
+
+def _human_shape_model_checkpoints_dir() -> Path:
+    path = _human_shape_lab_dirs()["models"] / "checkpoints"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _save_human_shape_model_checkpoint(name: str | None, include_objective_snapshot: bool = True) -> dict:
+    refiner_path = _human_shape_keypoint_refiner_path()
+    if not refiner_path.exists():
+        raise FileNotFoundError("No existe modelo de keypoints para guardar checkpoint")
+
+    ts = int(time.time())
+    raw_name = (name or "checkpoint").strip()
+    safe_name = _sanitize_name(raw_name) if raw_name else "checkpoint"
+    ckpt_dir = _human_shape_model_checkpoints_dir() / f"{safe_name}_{ts}"
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+
+    refiner_dst = ckpt_dir / "keypoint_refiner_v1.json"
+    shutil.copy2(refiner_path, refiner_dst)
+
+    objective_src = _human_shape_objective_snapshot_path()
+    objective_dst = None
+    if include_objective_snapshot and objective_src.exists():
+        objective_dst = ckpt_dir / "keypoint_objective_snapshot.json"
+        shutil.copy2(objective_src, objective_dst)
+
+    meta = {
+        "saved_at": ts,
+        "name": raw_name or "checkpoint",
+        "checkpoint_dir": _to_repo_relative(ckpt_dir),
+        "refiner_path": _to_repo_relative(refiner_dst),
+        "objective_snapshot_path": _to_repo_relative(objective_dst) if objective_dst else None,
+    }
+    (ckpt_dir / "meta.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
+    return meta
 
 
 def _human_shape_sample_id(image_name: str) -> str:
@@ -1805,19 +2003,1024 @@ def _save_keypoint_refiner_model(model: dict) -> dict:
     return model
 
 
-def _estimate_base_keypoints_for_manifest(manifest: dict) -> tuple[dict[str, dict], str]:
+def _detect_face_bbox(image_path: Path) -> tuple[dict | None, dict]:
+    """Detect a frontal face using OpenCV Haar cascade (simple and fast)."""
+    try:
+        import cv2  # type: ignore
+
+        img = cv2.imread(str(image_path))
+        if img is None:
+            return None, {"strategy": "opencv_haar", "reason": "image_load_failed"}
+
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        cascade_path = str(Path(cv2.data.haarcascades) / "haarcascade_frontalface_default.xml")
+        classifier = cv2.CascadeClassifier(cascade_path)
+        if classifier.empty():
+            return None, {"strategy": "opencv_haar", "reason": "cascade_not_loaded"}
+
+        faces = classifier.detectMultiScale(
+            gray,
+            scaleFactor=1.1,
+            minNeighbors=5,
+            minSize=(36, 36),
+        )
+        if faces is None or len(faces) == 0:
+            return None, {"strategy": "opencv_haar", "reason": "no_face"}
+
+        x, y, w, h = max(faces, key=lambda f: int(f[2]) * int(f[3]))
+        ih, iw = gray.shape
+        bbox = {
+            "x_min": _clamp01(float(x) / max(1.0, float(iw))),
+            "x_max": _clamp01(float(x + w) / max(1.0, float(iw))),
+            "y_min": _clamp01(float(y) / max(1.0, float(ih))),
+            "y_max": _clamp01(float(y + h) / max(1.0, float(ih))),
+            "cx": _clamp01(float(x + w * 0.5) / max(1.0, float(iw))),
+            "cy": _clamp01(float(y + h * 0.5) / max(1.0, float(ih))),
+            "w": _clamp01(float(w) / max(1.0, float(iw))),
+            "h": _clamp01(float(h) / max(1.0, float(ih))),
+        }
+        return bbox, {
+            "strategy": "opencv_haar",
+            "image_path": _to_repo_relative(image_path),
+            "cascade": "haarcascade_frontalface_default.xml",
+            "faces_found": int(len(faces)),
+        }
+    except Exception as exc:
+        return None, {"strategy": "opencv_haar", "reason": f"error:{exc}"}
+
+
+def _face_anchored_geometric(face_bbox: dict | None) -> tuple[dict[str, dict], dict]:
+    """Shift geometric template using face as anchor when pose/silhouette are weak."""
+    base = _geometric_keypoints()
+    if not face_bbox:
+        return base, {"strategy": "geometric"}
+
+    cx = float(face_bbox.get("cx", 0.5))
+    y_top = float(face_bbox.get("y_min", 0.05))
+    f_w = max(0.08, float(face_bbox.get("w", 0.15)))
+    f_h = max(0.08, float(face_bbox.get("h", 0.18)))
+
+    x_scale = min(0.55, max(0.25, f_w * 2.3))
+    y_scale = min(0.95, max(0.60, f_h * 6.8))
+
+    anchored: dict[str, dict] = {}
+    for name, kp in base.items():
+        x = cx + (float(kp.get("x", 0.5)) - 0.5) * x_scale
+        y = y_top + (float(kp.get("y", 0.04)) - 0.04) * y_scale
+        anchored[name] = {
+            "x": _clamp01(x),
+            "y": _clamp01(y),
+            "visible": bool(kp.get("visible", True)),
+            "optional": bool(kp.get("optional", False)),
+        }
+
+    return anchored, {
+        "strategy": "face_anchored_geometric",
+        "face_bbox": face_bbox,
+        "x_scale": x_scale,
+        "y_scale": y_scale,
+    }
+
+
+def _silhouette_keypoints_from_manifest(manifest: dict, face_hint: dict | None = None) -> tuple[dict[str, dict] | None, dict]:
+    """Estimate keypoints from the sample mask silhouette when pose landmarks are unavailable."""
+    mask_rel = manifest.get("mask_path") or manifest.get("auto_mask_path")
+    if not mask_rel:
+        return None, {"strategy": "silhouette_mask", "reason": "missing_mask_path"}
+
+    mask_path = _resolve_input_path(mask_rel)
+    if not mask_path.exists():
+        return None, {"strategy": "silhouette_mask", "reason": "mask_not_found"}
+
+    try:
+        from PIL import Image as PILImage
+
+        img = PILImage.open(mask_path).convert("L")
+        w, h = img.size
+        pix = img.load()
+
+        row_min: list[int | None] = [None] * h
+        row_max: list[int | None] = [None] * h
+        x_min, x_max = w, -1
+        y_min, y_max = h, -1
+        fg_pixels = 0
+
+        for y in range(h):
+            left = None
+            right = None
+            for x in range(w):
+                if int(pix[x, y]) > 12:
+                    fg_pixels += 1
+                    if left is None:
+                        left = x
+                    right = x
+            if left is not None and right is not None:
+                row_min[y] = left
+                row_max[y] = right
+                x_min = min(x_min, left)
+                x_max = max(x_max, right)
+                y_min = min(y_min, y)
+                y_max = max(y_max, y)
+
+        if fg_pixels < 100 or x_max < x_min or y_max < y_min:
+            return None, {"strategy": "silhouette_mask", "reason": "weak_foreground"}
+
+        body_h = max(1, y_max - y_min)
+        body_w = max(1, x_max - x_min)
+
+        def _span_at(rel_y: float) -> tuple[int, int, int]:
+            y0 = int(y_min + rel_y * body_h)
+            y0 = max(0, min(h - 1, y0))
+            max_search = max(6, int(0.15 * h))
+            for d in range(0, max_search + 1):
+                for cand in (y0 - d, y0 + d):
+                    if cand < 0 or cand >= h:
+                        continue
+                    l = row_min[cand]
+                    r = row_max[cand]
+                    if l is not None and r is not None:
+                        return l, r, cand
+            return x_min, x_max, y0
+
+        def _mk(rel_y: float, frac_x: float, optional: bool = False) -> dict:
+            l, r, yy = _span_at(rel_y)
+            span = max(1, r - l)
+            xx = l + frac_x * span
+            return {
+                "x": _clamp01(xx / max(1.0, float(w))),
+                "y": _clamp01(yy / max(1.0, float(h))),
+                "visible": True,
+                "optional": optional,
+            }
+
+        crown_y = _clamp01(y_min / max(1.0, float(h)))
+        chin_rel = 0.13
+        neck_rel = 0.20
+        shoulder_rel = 0.24
+        if face_hint:
+            fx_min = float(face_hint.get("x_min", 0.0))
+            fx_max = float(face_hint.get("x_max", 1.0))
+            fy_min = float(face_hint.get("y_min", crown_y))
+            fy_max = float(face_hint.get("y_max", crown_y + 0.10))
+            crown_y = _clamp01(fy_min)
+            chin_abs = _clamp01(fy_max)
+            y0_norm = _clamp01(y_min / max(1.0, float(h)))
+            body_h_norm = max(1e-6, float(body_h) / max(1.0, float(h)))
+            chin_rel = _clamp01((chin_abs - y0_norm) / body_h_norm)
+            neck_rel = _clamp01(chin_rel + 0.07)
+            shoulder_rel = _clamp01(chin_rel + 0.11)
+
+        kp = {
+            "crown": {"x": _clamp01(((x_min + x_max) * 0.5) / max(1.0, float(w))), "y": crown_y, "visible": True, "optional": False},
+            "chin": _mk(chin_rel, 0.50),
+            "neck_base": _mk(neck_rel, 0.50),
+            "left_shoulder": _mk(shoulder_rel, 0.22),
+            "right_shoulder": _mk(shoulder_rel, 0.78),
+            "left_elbow": _mk(0.43, 0.16),
+            "right_elbow": _mk(0.43, 0.84),
+            "left_wrist": _mk(0.58, 0.10),
+            "right_wrist": _mk(0.58, 0.90),
+            "left_hand_tip": _mk(0.64, 0.08, optional=True),
+            "right_hand_tip": _mk(0.64, 0.92, optional=True),
+            "hip_center": _mk(0.58, 0.50),
+            "left_hip": _mk(0.58, 0.35),
+            "right_hip": _mk(0.58, 0.65),
+            "left_knee": _mk(0.77, 0.38),
+            "right_knee": _mk(0.77, 0.62),
+            "left_ankle": _mk(0.91, 0.40),
+            "right_ankle": _mk(0.91, 0.60),
+            "left_toe": _mk(0.97, 0.36, optional=True),
+            "right_toe": _mk(0.97, 0.64, optional=True),
+        }
+
+        # If face is horizontally displaced from mask center, shift full skeleton accordingly.
+        if face_hint:
+            mask_cx = _clamp01(((x_min + x_max) * 0.5) / max(1.0, float(w)))
+            face_cx = _clamp01(float(face_hint.get("cx", mask_cx)))
+            dx = face_cx - mask_cx
+            if abs(dx) > 0.01:
+                for name in BODY_KEYPOINT_NAMES:
+                    kp[name]["x"] = _clamp01(float(kp[name]["x"]) + dx)
+
+        params = {
+            "strategy": "silhouette_mask",
+            "mask_path": _to_repo_relative(mask_path),
+            "bbox_norm": {
+                "x_min": _clamp01(x_min / max(1.0, float(w))),
+                "x_max": _clamp01(x_max / max(1.0, float(w))),
+                "y_min": _clamp01(y_min / max(1.0, float(h))),
+                "y_max": _clamp01(y_max / max(1.0, float(h))),
+            },
+            "foreground_ratio": fg_pixels / float(max(1, w * h)),
+            "face_hint_used": bool(face_hint),
+            "face_hint": face_hint,
+            "face_shift_dx": (float(face_hint.get("cx", 0.5)) - _clamp01(((x_min + x_max) * 0.5) / max(1.0, float(w)))) if face_hint else 0.0,
+        }
+        return kp, params
+    except Exception as exc:
+        return None, {"strategy": "silhouette_mask", "reason": f"error:{exc}"}
+
+
+def _detect_skin_body_lines(image_path: Path, mask_path: Path | None = None, face_hint: dict | None = None) -> tuple[dict | None, dict]:
+    """Detect body side lines from skin-color ranges with adaptive thresholds and confidence gating."""
+    try:
+        import cv2  # type: ignore
+        import numpy as np
+
+        img = cv2.imread(str(image_path))
+        if img is None:
+            return None, {"strategy": "skin_lines", "reason": "image_load_failed"}
+
+        h, w = img.shape[:2]
+        if h < 16 or w < 16:
+            return None, {"strategy": "skin_lines", "reason": "image_too_small"}
+
+        # Restrict detection to person region when a body mask is available.
+        body_mask = np.full((h, w), 255, dtype=np.uint8)
+        mask_used = False
+        if mask_path and mask_path.exists():
+            m = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
+            if m is not None:
+                if m.shape[0] != h or m.shape[1] != w:
+                    m = cv2.resize(m, (w, h), interpolation=cv2.INTER_NEAREST)
+                body_mask = np.where(m > 12, 255, 0).astype(np.uint8)
+                mask_used = bool(np.count_nonzero(body_mask) > 64)
+
+        ycrcb = cv2.cvtColor(img, cv2.COLOR_BGR2YCrCb)
+        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+
+        # Fixed ranges to cover tones + shadows.
+        mask_ycrcb_main = cv2.inRange(ycrcb, (0, 133, 77), (255, 173, 127))
+        mask_ycrcb_shadow = cv2.inRange(ycrcb, (0, 125, 70), (255, 180, 138))
+        mask_hsv_main = cv2.inRange(hsv, (0, 22, 35), (28, 230, 255))
+        mask_hsv_shadow = cv2.inRange(hsv, (0, 10, 18), (35, 255, 210))
+        fixed_mask = cv2.bitwise_or(mask_ycrcb_main, mask_hsv_main)
+        fixed_mask = cv2.bitwise_or(fixed_mask, cv2.bitwise_and(mask_ycrcb_shadow, mask_hsv_shadow))
+
+        adaptive_used = False
+        adaptive_mask = np.zeros((h, w), dtype=np.uint8)
+
+        # Adaptive range from detected face to better match image-specific skin tone.
+        if face_hint:
+            x0 = int(max(0, min(w - 1, float(face_hint.get("x_min", 0.0)) * w)))
+            x1 = int(max(0, min(w, float(face_hint.get("x_max", 1.0)) * w)))
+            y0 = int(max(0, min(h - 1, float(face_hint.get("y_min", 0.0)) * h)))
+            y1 = int(max(0, min(h, float(face_hint.get("y_max", 1.0)) * h)))
+            if x1 > x0 + 6 and y1 > y0 + 6:
+                roi_ycrcb = ycrcb[y0:y1, x0:x1]
+                roi_hsv = hsv[y0:y1, x0:x1]
+                roi_mask = body_mask[y0:y1, x0:x1]
+                sel = roi_mask > 0
+                if np.count_nonzero(sel) > 32:
+                    cr = roi_ycrcb[:, :, 1][sel]
+                    cb = roi_ycrcb[:, :, 2][sel]
+                    hh = roi_hsv[:, :, 0][sel]
+                    ss = roi_hsv[:, :, 1][sel]
+                    if cr.size > 24 and cb.size > 24:
+                        cr_lo, cr_hi = np.percentile(cr, [8, 92])
+                        cb_lo, cb_hi = np.percentile(cb, [8, 92])
+                        h_lo, h_hi = np.percentile(hh, [8, 92]) if hh.size > 0 else (0, 30)
+                        s_lo, s_hi = np.percentile(ss, [6, 96]) if ss.size > 0 else (20, 240)
+                        # Add margin for lighting changes and shadows.
+                        cr_lo, cr_hi = max(115, cr_lo - 8), min(185, cr_hi + 8)
+                        cb_lo, cb_hi = max(60, cb_lo - 8), min(145, cb_hi + 8)
+                        h_lo, h_hi = max(0, h_lo - 4), min(40, h_hi + 4)
+                        s_lo, s_hi = max(8, s_lo - 12), min(255, s_hi + 18)
+                        mask_y_ad = cv2.inRange(ycrcb, (0, int(cr_lo), int(cb_lo)), (255, int(cr_hi), int(cb_hi)))
+                        mask_h_ad = cv2.inRange(hsv, (int(h_lo), int(s_lo), 12), (int(h_hi), int(s_hi), 255))
+                        adaptive_mask = cv2.bitwise_and(mask_y_ad, mask_h_ad)
+                        adaptive_used = True
+
+        mask = fixed_mask
+        if adaptive_used:
+            mask = cv2.bitwise_or(mask, adaptive_mask)
+
+        # Restrict to body and clean noise.
+        mask = cv2.bitwise_and(mask, body_mask)
+        kernel_small = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        kernel_mid = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel_small)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel_mid)
+
+        # Keep largest connected components only.
+        n_labels, labels, stats, _centroids = cv2.connectedComponentsWithStats((mask > 0).astype(np.uint8), connectivity=8)
+        if n_labels > 1:
+            areas = []
+            for i in range(1, n_labels):
+                areas.append((int(stats[i, cv2.CC_STAT_AREA]), i))
+            areas.sort(reverse=True)
+            keep = {idx for _a, idx in areas[:4] if _a > max(24, int(0.0005 * h * w))}
+            filtered = np.zeros_like(mask)
+            for idx in keep:
+                filtered[labels == idx] = 255
+            mask = filtered
+
+        rows: list[dict] = []
+        width_ratios: list[float] = []
+        min_row_px = max(3, int(0.008 * w))
+        for y in range(0, h):
+            xs = np.where(mask[y] > 0)[0]
+            if xs.size < min_row_px:
+                continue
+            # Percentiles are more robust than min/max against outliers and shadows.
+            x0 = int(np.percentile(xs, 8))
+            x1 = int(np.percentile(xs, 92))
+            if x1 <= x0:
+                continue
+            row_w = x1 - x0
+            if row_w < max(4, int(0.02 * w)) or row_w > int(0.78 * w):
+                continue
+            width_ratio = float(row_w) / max(1.0, float(w))
+            width_ratios.append(width_ratio)
+            rows.append({
+                "y": _clamp01(float(y) / max(1.0, float(h))),
+                "x_min": _clamp01(float(x0) / max(1.0, float(w))),
+                "x_max": _clamp01(float(x1) / max(1.0, float(w))),
+                "width_ratio": width_ratio,
+            })
+
+        coverage = float(len(rows)) / max(1.0, float(h))
+        median_width_ratio = float(np.median(width_ratios)) if width_ratios else 0.0
+        confidence = min(1.0, coverage * 3.2 + (0.22 if adaptive_used else 0.0) + (0.12 if mask_used else 0.0))
+
+        # If skin seems too spread across body, likely clothing/background contamination.
+        if coverage > 0.45:
+            confidence *= 0.25
+        if median_width_ratio > 0.32:
+            confidence *= 0.45
+
+        if len(rows) < max(8, int(0.05 * h)) or confidence < 0.28:
+            return None, {
+                "strategy": "skin_lines",
+                "reason": "low_confidence",
+                "rows": len(rows),
+                "coverage": coverage,
+                "median_width_ratio": median_width_ratio,
+                "confidence": confidence,
+                "adaptive_used": adaptive_used,
+                "mask_used": mask_used,
+            }
+
+        return {
+            "rows": rows,
+            "coverage": coverage,
+            "median_width_ratio": median_width_ratio,
+            "confidence": confidence,
+            "adaptive_used": adaptive_used,
+            "mask_used": mask_used,
+        }, {
+            "strategy": "skin_lines",
+            "image_path": _to_repo_relative(image_path),
+            "rows_detected": len(rows),
+            "coverage": coverage,
+            "median_width_ratio": median_width_ratio,
+            "confidence": confidence,
+            "adaptive_used": adaptive_used,
+            "mask_used": mask_used,
+        }
+    except Exception as exc:
+        return None, {"strategy": "skin_lines", "reason": f"error:{exc}"}
+
+
+def _apply_skin_guided_body_lines(kp: dict[str, dict], skin_lines: dict | None, alpha: float = 0.22) -> tuple[dict[str, dict], dict]:
+    if not skin_lines or not isinstance(skin_lines.get("rows"), list):
+        return _normalize_keypoint_map(kp, force_visible=True), {"applied": False, "reason": "no_skin_lines"}
+
+    out = _normalize_keypoint_map(kp, force_visible=True)
+    rows = skin_lines.get("rows") or []
+    confidence = float(skin_lines.get("confidence", 0.0))
+    if not rows:
+        return out, {"applied": False, "reason": "empty_rows"}
+    if confidence < 0.22:
+        return out, {"applied": False, "reason": "low_confidence", "confidence": confidence}
+
+    def span_at(y_norm: float) -> tuple[float, float, float] | None:
+        best = None
+        best_d = None
+        for r in rows:
+            yy = float(r.get("y", 0.0))
+            d = abs(yy - y_norm)
+            if best_d is None or d < best_d:
+                best_d = d
+                best = r
+        if best is None or best_d is None:
+            return None
+        x_min = float(best.get("x_min", 0.0))
+        x_max = float(best.get("x_max", 1.0))
+        if x_max <= x_min:
+            return None
+        return x_min, x_max, float(best_d)
+
+    side_pairs = [
+        ("left_shoulder", "right_shoulder", 0.14),
+        ("left_elbow", "right_elbow", 0.11),
+        ("left_wrist", "right_wrist", 0.09),
+        ("left_hip", "right_hip", 0.16),
+        ("left_knee", "right_knee", 0.20),
+        ("left_ankle", "right_ankle", 0.23),
+        ("left_toe", "right_toe", 0.25),
+    ]
+
+    # Strong guidance only when confidence is high; weak otherwise.
+    alpha_eff = float(alpha) * max(0.35, min(1.2, confidence))
+
+    touched = 0
+    for left_name, right_name, side_margin in side_pairs:
+        y_ref = (float(out[left_name]["y"]) + float(out[right_name]["y"])) / 2.0
+        span = span_at(y_ref)
+        if not span:
+            continue
+        x_min, x_max, y_delta = span
+        if y_delta > 0.06:
+            continue
+        width = max(1e-6, x_max - x_min)
+        left_target = _clamp01(x_min + width * side_margin)
+        right_target = _clamp01(x_max - width * side_margin)
+        out[left_name]["x"] = _clamp01((1.0 - alpha_eff) * float(out[left_name]["x"]) + alpha_eff * left_target)
+        out[right_name]["x"] = _clamp01((1.0 - alpha_eff) * float(out[right_name]["x"]) + alpha_eff * right_target)
+        touched += 2
+
+    return out, {
+        "applied": touched > 0,
+        "alpha": alpha_eff,
+        "touched_keypoints": touched,
+        "rows": len(rows),
+        "coverage": float(skin_lines.get("coverage", 0.0)),
+        "confidence": confidence,
+        "adaptive_used": bool(skin_lines.get("adaptive_used", False)),
+        "mask_used": bool(skin_lines.get("mask_used", False)),
+    }
+
+
+def _detect_skin_limb_profiles(
+    image_path: "Path",
+    mask_path: "Path | None",
+    face_hint: "dict | None",
+    kp_hint: "dict[str, dict] | None",
+) -> dict:
+    """Detect per-limb skin presence, continuity, and flex hints.
+    Returns {limb_name: {has_skin, rows, coverage, continuity, suggest_flex}} for
+    left/right arm, forearm, leg, calf.
+    """
+    try:
+        import cv2  # type: ignore
+        import numpy as np
+
+        img = cv2.imread(str(image_path))
+        if img is None:
+            return {}
+        h, w = img.shape[:2]
+        if h < 20 or w < 20:
+            return {}
+
+        # Build body mask
+        body_mask = np.full((h, w), 255, dtype=np.uint8)
+        if mask_path and mask_path.exists():
+            m = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
+            if m is not None:
+                if m.shape[0] != h or m.shape[1] != w:
+                    m = cv2.resize(m, (w, h), interpolation=cv2.INTER_NEAREST)
+                body_mask = np.where(m > 12, 255, 0).astype(np.uint8)
+
+        ycrcb = cv2.cvtColor(img, cv2.COLOR_BGR2YCrCb)
+        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+
+        mask_y = cv2.inRange(ycrcb, (0, 125, 70), (255, 180, 138))
+        mask_h = cv2.inRange(hsv, (0, 10, 18), (35, 255, 210))
+        skin_mask = cv2.bitwise_or(mask_y, mask_h)
+
+        # Adaptive calibration from face ROI
+        if face_hint:
+            x0 = int(max(0, float(face_hint.get("x_min", 0.0)) * w))
+            x1 = int(min(w, float(face_hint.get("x_max", 1.0)) * w))
+            y0 = int(max(0, float(face_hint.get("y_min", 0.0)) * h))
+            y1 = int(min(h, float(face_hint.get("y_max", 1.0)) * h))
+            if x1 > x0 + 6 and y1 > y0 + 6:
+                roi_ycrcb = ycrcb[y0:y1, x0:x1]
+                roi_hsv = hsv[y0:y1, x0:x1]
+                sel = body_mask[y0:y1, x0:x1] > 0
+                if np.count_nonzero(sel) > 32:
+                    cr = roi_ycrcb[:, :, 1][sel]
+                    cb = roi_ycrcb[:, :, 2][sel]
+                    hh = roi_hsv[:, :, 0][sel]
+                    ss = roi_hsv[:, :, 1][sel]
+                    if cr.size > 24:
+                        cr_lo = max(115, float(np.percentile(cr, 8)) - 8)
+                        cr_hi = min(185, float(np.percentile(cr, 92)) + 8)
+                        cb_lo = max(60, float(np.percentile(cb, 8)) - 8)
+                        cb_hi = min(145, float(np.percentile(cb, 92)) + 8)
+                        h_lo = max(0, float(np.percentile(hh, 8)) - 4)
+                        h_hi = min(40, float(np.percentile(hh, 92)) + 4)
+                        s_lo = max(8, float(np.percentile(ss, 6)) - 12)
+                        s_hi = min(255, float(np.percentile(ss, 96)) + 18)
+                        ad_y = cv2.inRange(ycrcb, (0, int(cr_lo), int(cb_lo)), (255, int(cr_hi), int(cb_hi)))
+                        ad_h = cv2.inRange(hsv, (int(h_lo), int(s_lo), 12), (int(h_hi), int(s_hi), 255))
+                        skin_mask = cv2.bitwise_or(skin_mask, cv2.bitwise_and(ad_y, ad_h))
+
+        skin_mask = cv2.bitwise_and(skin_mask, body_mask)
+        k3 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        k5 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        skin_mask = cv2.morphologyEx(skin_mask, cv2.MORPH_OPEN, k3)
+        skin_mask = cv2.morphologyEx(skin_mask, cv2.MORPH_CLOSE, k5)
+
+        kp = _normalize_keypoint_map(kp_hint or {}, force_visible=True)
+
+        def _ypx(name: str) -> int:
+            return int(_clamp01(float(kp[name]["y"])) * h)
+
+        def _xpx(name: str) -> int:
+            return int(_clamp01(float(kp[name]["x"])) * w)
+
+        margin = max(8, int(0.07 * w))
+
+        def _profile(y_top_px: int, y_bot_px: int, x_lo_px: int, x_hi_px: int, name: str) -> dict:
+            yt = max(0, min(h - 1, y_top_px))
+            yb = max(0, min(h, y_bot_px))
+            xl = max(0, min(w - 1, x_lo_px))
+            xr = max(0, min(w, x_hi_px))
+            if yb <= yt + 2 or xr <= xl + 2:
+                return {"has_skin": False, "rows": [], "coverage": 0.0, "continuity": 0.0, "suggest_flex": False}
+
+            reg = skin_mask[yt:yb, xl:xr]
+            min_skin_px = max(2, int(0.05 * (xr - xl)))
+            rows_with: list[dict] = []
+            runs: list[int] = []
+            in_skin = False
+            run_len = 0
+
+            for ry in range(reg.shape[0]):
+                row_skin = np.where(reg[ry] > 0)[0]
+                has = row_skin.size >= min_skin_px
+                if has:
+                    cx = int(np.mean(row_skin)) + xl
+                    rows_with.append({
+                        "y": _clamp01(float(ry + yt) / h),
+                        "x_center": _clamp01(float(cx) / w),
+                        "x_min": _clamp01(float(int(row_skin.min()) + xl) / w),
+                        "x_max": _clamp01(float(int(row_skin.max()) + xl) / w),
+                    })
+                    run_len += 1
+                    in_skin = True
+                else:
+                    if in_skin:
+                        runs.append(run_len)
+                        run_len = 0
+                        in_skin = False
+            if in_skin:
+                runs.append(run_len)
+
+            total = yb - yt
+            coverage = float(len(rows_with)) / max(1, total)
+            continuity = min(1.0, coverage * 1.6)
+            # Discontinuity: multiple runs with total coverage < 0.55 suggests flex/gap
+            suggest_flex = len(runs) >= 2 and coverage < 0.58 and max(runs) < 0.85 * total
+            return {
+                "has_skin": coverage > 0.12,
+                "rows": rows_with,
+                "coverage": coverage,
+                "continuity": continuity,
+                "suggest_flex": suggest_flex,
+            }
+
+        profiles: dict[str, dict] = {}
+        for side in ("left", "right"):
+            sy, sx = _ypx(f"{side}_shoulder"), _xpx(f"{side}_shoulder")
+            ey, ex = _ypx(f"{side}_elbow"), _xpx(f"{side}_elbow")
+            wy, wx = _ypx(f"{side}_wrist"), _xpx(f"{side}_wrist")
+            hy, hx = _ypx(f"{side}_hip"), _xpx(f"{side}_hip")
+            ky, kx = _ypx(f"{side}_knee"), _xpx(f"{side}_knee")
+            ay, ax = _ypx(f"{side}_ankle"), _xpx(f"{side}_ankle")
+
+            profiles[f"{side}_arm"] = _profile(
+                min(sy, ey), max(sy, ey) + 1,
+                min(sx, ex) - margin, max(sx, ex) + margin,
+                f"{side}_arm"
+            )
+            profiles[f"{side}_forearm"] = _profile(
+                min(ey, wy), max(ey, wy) + 1,
+                min(ex, wx) - margin, max(ex, wx) + margin,
+                f"{side}_forearm"
+            )
+            profiles[f"{side}_leg"] = _profile(
+                min(hy, ky), max(hy, ky) + 1,
+                min(hx, kx) - margin, max(hx, kx) + margin,
+                f"{side}_leg"
+            )
+            profiles[f"{side}_calf"] = _profile(
+                min(ky, ay), max(ky, ay) + 1,
+                min(kx, ax) - margin, max(kx, ax) + margin,
+                f"{side}_calf"
+            )
+        return profiles
+    except Exception:
+        return {}
+
+
+def _detect_waist_color_boundary(
+    image_path: "Path",
+    mask_path: "Path | None",
+    kp_hint: "dict[str, dict] | None",
+) -> dict:
+    """Detect the waist position via a horizontal color-change boundary between top and bottom garments."""
+    try:
+        import cv2  # type: ignore
+        import numpy as np
+
+        img = cv2.imread(str(image_path))
+        if img is None:
+            return {"found": False, "reason": "image_load_failed"}
+        h, w = img.shape[:2]
+
+        body_mask = np.full((h, w), 255, dtype=np.uint8)
+        if mask_path and mask_path.exists():
+            m = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
+            if m is not None:
+                if m.shape[0] != h or m.shape[1] != w:
+                    m = cv2.resize(m, (w, h), interpolation=cv2.INTER_NEAREST)
+                body_mask = np.where(m > 12, 255, 0).astype(np.uint8)
+
+        kp = _normalize_keypoint_map(kp_hint or {}, force_visible=True)
+        neck_y = float(kp["neck_base"]["y"])
+        hip_y = float(kp["hip_center"]["y"])
+        torso_h = max(0.10, hip_y - neck_y)
+
+        # Search band: 30-90% of the torso span
+        sy_top = int((neck_y + 0.30 * torso_h) * h)
+        sy_bot = int((neck_y + 0.90 * torso_h) * h)
+        sy_top = max(0, min(h - 4, sy_top))
+        sy_bot = max(sy_top + 4, min(h - 1, sy_bot))
+
+        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+        # Smooth horizontally to reduce noise
+        hsv_blur = cv2.GaussianBlur(hsv, (5, 1), 0)
+
+        row_feats: list[tuple[int, float, float, float]] = []  # (abs_y, hue, sat, val)
+        for y in range(sy_top, sy_bot):
+            row_mask = body_mask[y] > 0
+            n = int(np.count_nonzero(row_mask))
+            if n < max(4, int(0.08 * w)):
+                continue
+            hue = float(np.mean(hsv_blur[y, :, 0][row_mask]))
+            sat = float(np.mean(hsv_blur[y, :, 1][row_mask]))
+            val = float(np.mean(hsv_blur[y, :, 2][row_mask]))
+            row_feats.append((y, hue, sat, val))
+
+        if len(row_feats) < 8:
+            return {"found": False, "reason": "insufficient_rows", "waist_y": hip_y - torso_h * 0.15}
+
+        window = max(3, len(row_feats) // 5)
+        best_score = 0.0
+        best_idx = len(row_feats) // 2
+
+        for i in range(window, len(row_feats) - window):
+            up_h = float(np.mean([r[1] for r in row_feats[max(0, i - window):i]]))
+            dn_h = float(np.mean([r[1] for r in row_feats[i:i + window]]))
+            up_s = float(np.mean([r[2] for r in row_feats[max(0, i - window):i]]))
+            dn_s = float(np.mean([r[2] for r in row_feats[i:i + window]]))
+            up_v = float(np.mean([r[3] for r in row_feats[max(0, i - window):i]]))
+            dn_v = float(np.mean([r[3] for r in row_feats[i:i + window]]))
+            # Hue difference is most meaningful for garment change; wrap-safe
+            hd = min(abs(up_h - dn_h), 180.0 - abs(up_h - dn_h))
+            score = hd * 0.5 + abs(up_s - dn_s) * 0.3 + abs(up_v - dn_v) * 0.2
+            if score > best_score:
+                best_score = score
+                best_idx = i
+
+        boundary_y_abs = row_feats[best_idx][0]
+        waist_y = _clamp01(float(boundary_y_abs) / h)
+        confidence = min(1.0, best_score / 28.0)
+        return {
+            "found": confidence > 0.18,
+            "waist_y": waist_y,
+            "confidence": confidence,
+            "score": best_score,
+        }
+    except Exception as exc:
+        return {"found": False, "reason": f"error:{exc}", "waist_y": None}
+
+
+def _detect_torso_inclination_from_kp(kp: "dict[str, dict]") -> dict:
+    """Estimate body tilt from shoulder/hip asymmetry in the current keypoints."""
+    import math
+    k = _normalize_keypoint_map(kp, force_visible=True)
+    ls, rs = k["left_shoulder"], k["right_shoulder"]
+    lh, rh = k["left_hip"], k["right_hip"]
+    neck, hipc = k["neck_base"], k["hip_center"]
+
+    sh_dx = max(1e-6, float(rs["x"]) - float(ls["x"]))
+    sh_dy = float(rs["y"]) - float(ls["y"])
+    shoulder_tilt = math.degrees(math.atan2(sh_dy, sh_dx))
+
+    hip_dx = max(1e-6, float(rh["x"]) - float(lh["x"]))
+    hip_dy = float(rh["y"]) - float(lh["y"])
+    hip_tilt = math.degrees(math.atan2(hip_dy, hip_dx))
+
+    torso_dx = float(hipc["x"]) - float(neck["x"])
+    torso_dy = max(1e-6, float(hipc["y"]) - float(neck["y"]))
+    # Angle of torso from true vertical (positive = leaning right)
+    torso_lean = math.degrees(math.atan2(torso_dx, torso_dy))
+
+    return {
+        "shoulder_tilt_deg": shoulder_tilt,
+        "hip_tilt_deg": hip_tilt,
+        "torso_lean_deg": torso_lean,
+        "avg_tilt_deg": (shoulder_tilt + hip_tilt) / 2.0,
+        "is_tilted": abs(torso_lean) > 2.5,
+    }
+
+
+def _apply_skin_guided_limb_lines(
+    kp: "dict[str, dict]",
+    limb_profiles: dict,
+    waist_info: "dict | None",
+    inclination_info: "dict | None",
+    alpha: float = 0.25,
+) -> "tuple[dict[str, dict], dict]":
+    """
+    Enhanced skin-based keypoint correction:
+    - Guides arm/forearm joints to follow skin-colour columns.
+    - Guides leg/calf joints to follow skin-colour columns.
+    - Simulates a bend at the joint when skin has an internal gap.
+    - Applies torso lean to crown/chin when the shoulder line is tilted.
+    - Corrects hip_center/left_hip/right_hip to the detected waist boundary.
+    """
+    import math
+
+    out = _normalize_keypoint_map(kp, force_visible=True)
+
+    notes: list[str] = []
+
+    def blend(old: float, new: float, a: float) -> float:
+        return _clamp01((1.0 - a) * old + a * new)
+
+    def skin_x_near_y(profile: dict, y_norm: float, delta: float = 0.06) -> "float | None":
+        rows = profile.get("rows") or []
+        close = [r for r in rows if abs(float(r["y"]) - y_norm) <= delta]
+        if not close:
+            return None
+        return float(sum(r["x_center"] for r in close) / len(close))
+
+    def skin_x_range_near_y(profile: dict, y_norm: float, delta: float = 0.06) -> "tuple[float, float] | None":
+        rows = profile.get("rows") or []
+        close = [r for r in rows if abs(float(r["y"]) - y_norm) <= delta]
+        if not close:
+            return None
+        return (float(sum(r["x_min"] for r in close) / len(close)),
+                float(sum(r["x_max"] for r in close) / len(close)))
+
+    # ── ARM / FOREARM guidance ──────────────────────────────────────────────
+    arm_segs = [
+        ("left_arm",     "left_shoulder",  "left_elbow",  "left"),
+        ("right_arm",    "right_shoulder", "right_elbow", "right"),
+        ("left_forearm", "left_elbow",     "left_wrist",  "left"),
+        ("right_forearm","right_elbow",    "right_wrist", "right"),
+    ]
+    arm_alpha = min(0.38, alpha * 1.6)
+
+    for limb_id, top_kp, bot_kp, side in arm_segs:
+        prof = limb_profiles.get(limb_id) or {}
+        if not prof.get("has_skin"):
+            continue
+        cont = float(prof.get("continuity", 0.4))
+        a = arm_alpha * cont
+
+        # Guide top joint x
+        top_y = float(out[top_kp]["y"])
+        bot_y = float(out[bot_kp]["y"])
+        sx_top = skin_x_near_y(prof, top_y)
+        if sx_top is not None:
+            out[top_kp]["x"] = blend(float(out[top_kp]["x"]), sx_top, a)
+            notes.append(f"{top_kp}_x")
+
+        sx_bot = skin_x_near_y(prof, bot_y)
+        if sx_bot is not None:
+            out[bot_kp]["x"] = blend(float(out[bot_kp]["x"]), sx_bot, a)
+            notes.append(f"{bot_kp}_x")
+
+        # Flex simulation: if there is an internal gap in skin rows, interpret it as
+        # a bend of the joint (elbow or wrist hidden by body / clothing transition).
+        if prof.get("suggest_flex"):
+            rows_ys = sorted(float(r["y"]) for r in (prof.get("rows") or []))
+            if len(rows_ys) >= 4:
+                gaps = [
+                    (rows_ys[i + 1] - rows_ys[i], (rows_ys[i] + rows_ys[i + 1]) / 2.0)
+                    for i in range(len(rows_ys) - 1)
+                ]
+                if gaps:
+                    biggest = max(gaps, key=lambda g: g[0])
+                    gap_y = biggest[1]
+                    joint_y = float(out[bot_kp]["y"])
+                    if abs(joint_y - gap_y) < 0.07 and biggest[0] > 0.02:
+                        # Nudge joint outward to simulate fold
+                        sign = -1.0 if side == "left" else 1.0
+                        nudge = sign * 0.035 * a * 2.5
+                        out[bot_kp]["x"] = _clamp01(float(out[bot_kp]["x"]) + nudge)
+                        notes.append(f"{bot_kp}_flex")
+
+    # ── LEG / CALF guidance ─────────────────────────────────────────────────
+    leg_segs = [
+        ("left_leg",  "left_hip",  "left_knee",  "left"),
+        ("right_leg", "right_hip", "right_knee", "right"),
+        ("left_calf", "left_knee", "left_ankle", "left"),
+        ("right_calf","right_knee","right_ankle","right"),
+    ]
+    leg_alpha = min(0.45, alpha * 2.0)  # skin on bare legs is very reliable
+
+    for limb_id, top_kp, bot_kp, side in leg_segs:
+        prof = limb_profiles.get(limb_id) or {}
+        if not prof.get("has_skin"):
+            continue
+        rows = prof.get("rows") or []
+        if len(rows) < 3:
+            continue
+        cont = float(prof.get("continuity", 0.4))
+        a = leg_alpha * cont
+
+        # Sample the skin column at multiple points along the segment and guide each joint
+        top_y = float(out[top_kp]["y"])
+        bot_y = float(out[bot_kp]["y"])
+        for t in (0.15, 0.5, 0.85):
+            y_sample = top_y + t * (bot_y - top_y)
+            sx = skin_x_near_y(prof, y_sample, delta=0.04)
+            if sx is None:
+                continue
+            kp_name = top_kp if t < 0.5 else bot_kp
+            out[kp_name]["x"] = blend(float(out[kp_name]["x"]), sx, a * 0.7)
+        notes.append(f"{limb_id}_guided")
+
+        # Also refine the y-position of the bottom joint when a discontinuity suggests
+        # a clothing boundary (e.g., pants end) or a bent knee.
+        if prof.get("suggest_flex"):
+            rows_ys = sorted(float(r["y"]) for r in rows)
+            if len(rows_ys) >= 4:
+                gaps = [
+                    (rows_ys[i + 1] - rows_ys[i], (rows_ys[i] + rows_ys[i + 1]) / 2.0)
+                    for i in range(len(rows_ys) - 1)
+                ]
+                if gaps:
+                    biggest = max(gaps, key=lambda g: g[0])
+                    gap_y, gap_sz = biggest[1], biggest[0]
+                    joint_y = float(out[bot_kp]["y"])
+                    # If the gap is bigger than 3% of image height and near the joint, adjust
+                    if gap_sz > 0.03 and abs(joint_y - gap_y) < 0.08:
+                        out[bot_kp]["y"] = blend(joint_y, gap_y, a * 0.4)
+                        notes.append(f"{bot_kp}_y_gap")
+
+    # ── TORSO LEAN ─────────────────────────────────────────────────────────
+    if inclination_info and inclination_info.get("is_tilted"):
+        lean_deg = float(inclination_info.get("torso_lean_deg", 0.0))
+        if 2.5 < abs(lean_deg) < 28.0:
+            tilt_alpha = min(0.20, alpha * 0.8)
+            neck = out["neck_base"]
+            for name in ("crown", "chin"):
+                pt = out[name]
+                rel_y = float(neck["y"]) - float(pt["y"])  # positive when pt is above neck
+                # Expected x: follow the lean direction
+                shift = math.tan(math.radians(lean_deg)) * rel_y * 0.35
+                target_x = _clamp01(float(neck["x"]) - shift)
+                out[name]["x"] = blend(float(pt["x"]), target_x, tilt_alpha)
+            notes.append(f"torso_lean_{lean_deg:.1f}deg")
+
+    # ── WAIST BOUNDARY ─────────────────────────────────────────────────────
+    if waist_info and waist_info.get("found") and float(waist_info.get("confidence", 0.0)) > 0.18:
+        waist_y = float(waist_info["waist_y"])
+        waist_conf = float(waist_info["confidence"])
+        # Hip joints should be at or just below the waist boundary
+        hipy_now = float(out["hip_center"]["y"])
+        # Only update if detected waist is above current hip estimate (shouldn't push hips up into torso)
+        if waist_y < hipy_now - 0.01:
+            wa = min(0.30, waist_conf * 0.45)
+            # Place hip slightly below waist boundary (waist line is top of hips)
+            offset_below = max(0.02, (hipy_now - waist_y) * 0.25)
+            target_hip_y = _clamp01(waist_y + offset_below)
+            out["hip_center"]["y"] = blend(hipy_now, target_hip_y, wa)
+            for side in ("left", "right"):
+                hn = f"{side}_hip"
+                out[hn]["y"] = blend(float(out[hn]["y"]), target_hip_y, wa)
+            notes.append(f"waist_y={waist_y:.3f}")
+
+    return out, {
+        "applied": len(notes) > 0,
+        "notes": notes,
+        "limbs_with_skin": [k for k, v in limb_profiles.items() if v.get("has_skin")],
+    }
+
+
+def _estimate_base_keypoints_for_manifest(
+    manifest: dict,
+    pose_backend_override: str | None = None,
+) -> tuple[dict[str, dict], str, dict]:
+    face_bbox = None
+    face_meta = {"strategy": "opencv_haar", "reason": "no_image"}
+    skin_lines = None
+    skin_meta = {"strategy": "skin_lines", "reason": "no_image"}
+    image_path: "Path | None" = None
+
+    def _with_skin(kp_map: dict[str, dict], source: str, params: dict) -> tuple[dict[str, dict], str, dict]:
+        guided, guided_meta = _apply_skin_guided_body_lines(kp_map, skin_lines)
+        # Enhanced per-limb skin guidance + waist + inclination
+        limb_profiles: dict = {}
+        waist_info: dict = {}
+        inclination_info: dict = {}
+        limb_meta: dict = {}
+        if image_path is not None:
+            limb_profiles = _detect_skin_limb_profiles(image_path, mask_path, face_bbox, guided)
+            waist_info = _detect_waist_color_boundary(image_path, mask_path, guided)
+            inclination_info = _detect_torso_inclination_from_kp(guided)
+            guided, limb_meta = _apply_skin_guided_limb_lines(
+                guided, limb_profiles, waist_info, inclination_info
+            )
+        merged = {
+            **params,
+            "skin_lines": {
+                "detector": skin_meta,
+                "guidance": guided_meta,
+                "limb_guidance": limb_meta,
+                "waist": waist_info,
+                "inclination": inclination_info,
+            },
+        }
+        return _normalize_keypoint_map(guided, force_visible=True), source, merged
+
     image_rel = manifest.get("image_path")
+    mask_rel = manifest.get("mask_path") or manifest.get("auto_mask_path")
+    mask_path = _resolve_input_path(mask_rel) if mask_rel else None
     if image_rel:
-        image_path = _resolve_input_path(image_rel)
-        if image_path.exists():
-            kp = _mediapipe_keypoints(image_path)
-            if kp:
-                return kp, "mediapipe_pose"
-    return _geometric_keypoints(), "geometric"
+        _img_p = _resolve_input_path(image_rel)
+        if _img_p.exists():
+            image_path = _img_p
+            face_bbox, face_meta = _detect_face_bbox(image_path)
+            skin_lines, skin_meta = _detect_skin_body_lines(image_path, mask_path=mask_path, face_hint=face_bbox)
+            pose_backend = str(pose_backend_override or os.getenv("HUMAN_SHAPE_POSE_BACKEND", "legacy")).strip().lower()
+
+            if pose_backend in ("landmarker", "tasks", "v2", "both"):
+                kp_v2, mp_v2_meta = _mediapipe_landmarker_keypoints(image_path)
+                if kp_v2:
+                    return _with_skin(_normalize_keypoint_map(kp_v2, force_visible=True), "mediapipe_pose_landmarker", {
+                        "strategy": "mediapipe_pose_landmarker",
+                        "image_path": _to_repo_relative(image_path),
+                        "pose_backend": pose_backend,
+                        "pose_backend_meta": mp_v2_meta,
+                        "face_detection": {"bbox": face_bbox, **face_meta},
+                    })
+
+            if pose_backend in ("legacy", "v1", "both", ""):
+                kp = _mediapipe_keypoints(image_path)
+                if kp:
+                    return _with_skin(_normalize_keypoint_map(kp, force_visible=True), "mediapipe_pose", {
+                        "strategy": "mediapipe_pose",
+                        "image_path": _to_repo_relative(image_path),
+                        "pose_backend": pose_backend,
+                        "face_detection": {"bbox": face_bbox, **face_meta},
+                    })
+
+    auto_backend = str(manifest.get("auto_backend") or "")
+    is_corrected = bool(manifest.get("is_corrected"))
+    if auto_backend == "fallback_ellipse" and not is_corrected:
+        # Fallback ellipse is centered by design; for these samples prefer face anchor directly.
+        face_geo, face_geo_params = _face_anchored_geometric(face_bbox)
+        params = {
+            **face_geo_params,
+            "reason": "skip_silhouette_due_to_fallback_ellipse",
+            "face_detection": {"bbox": face_bbox, **face_meta},
+        }
+        return _with_skin(face_geo, str(face_geo_params.get("strategy", "geometric")), params)
+
+    sil_kp, sil_params = _silhouette_keypoints_from_manifest(manifest, face_hint=face_bbox)
+    if sil_kp:
+        params = {
+            **sil_params,
+            "face_detection": {"bbox": face_bbox, **face_meta},
+        }
+        return _with_skin(sil_kp, "silhouette_mask", params)
+
+    face_geo, face_geo_params = _face_anchored_geometric(face_bbox)
+    params = {
+        **face_geo_params,
+        "face_detection": {"bbox": face_bbox, **face_meta},
+    }
+    return _with_skin(face_geo, face_geo_params.get("strategy", "geometric"), params)
 
 
 def _clamp01(value: float) -> float:
     return max(0.0, min(1.0, float(value)))
+
+
+def _normalize_keypoint_map(raw: dict | None, force_visible: bool = True) -> dict[str, dict]:
+    """Ensure every sample has the same controllable keypoint schema."""
+    base_tpl = _geometric_keypoints()
+    src_map = raw or {}
+    out: dict[str, dict] = {}
+    for name in BODY_KEYPOINT_NAMES:
+        tpl = base_tpl.get(name) or {"x": 0.5, "y": 0.5, "visible": True, "optional": False}
+        src = src_map.get(name) or {}
+        out[name] = {
+            "x": _clamp01(src.get("x", tpl.get("x", 0.5))),
+            "y": _clamp01(src.get("y", tpl.get("y", 0.5))),
+            "visible": True if force_visible else bool(src.get("visible", tpl.get("visible", True))),
+            "optional": bool(src.get("optional", tpl.get("optional", False))),
+        }
+    return out
 
 
 def _apply_refiner(base: dict[str, dict], model: dict) -> dict[str, dict]:
@@ -1835,6 +3038,791 @@ def _apply_refiner(base: dict[str, dict], model: dict) -> dict[str, dict]:
     return out
 
 
+def _apply_golden_ratio_prior(kp: dict[str, dict], alpha: float = 0.35) -> tuple[dict[str, dict], dict]:
+    """Apply a soft full-body proportion prior (golden-ratio-inspired) over keypoints.
+
+    This keeps predictions consistent when full body is visible while preserving detected pose/offsets.
+    """
+    if alpha <= 0.0:
+        return kp, {"applied": False, "reason": "alpha_zero"}
+
+    phi = 1.61803398875
+    out = _normalize_keypoint_map(kp, force_visible=True)
+
+    crown = out.get("crown") or {"x": 0.5, "y": 0.04}
+    left_ankle = out.get("left_ankle") or {"y": 0.89}
+    right_ankle = out.get("right_ankle") or {"y": 0.89}
+    ankle_y = (float(left_ankle.get("y", 0.89)) + float(right_ankle.get("y", 0.89))) / 2.0
+    top_y = float(crown.get("y", 0.04))
+    body_h = max(0.18, ankle_y - top_y)
+
+    center_x = float((out.get("left_hip", {}).get("x", 0.41) + out.get("right_hip", {}).get("x", 0.59)) / 2.0)
+    shoulder_half_now = abs(float(out.get("right_shoulder", {}).get("x", 0.65)) - float(out.get("left_shoulder", {}).get("x", 0.35))) / 2.0
+    shoulder_half = max(0.06, shoulder_half_now)
+    hip_half = max(0.04, shoulder_half / phi)
+    knee_half = max(0.03, hip_half / phi)
+    ankle_half = max(0.02, knee_half / phi)
+
+    # Golden-section inspired vertical anchors.
+    chin_y = top_y + body_h * 0.09
+    neck_y = top_y + body_h * 0.14
+    shoulder_y = top_y + body_h * 0.18
+    hip_y = top_y + body_h * 0.618
+    knee_y = hip_y + (ankle_y - hip_y) * 0.618
+
+    def blend(v_old: float, v_new: float) -> float:
+        return _clamp01((1.0 - alpha) * float(v_old) + alpha * float(v_new))
+
+    # Centerline points
+    for name, yv in {
+        "crown": top_y,
+        "chin": chin_y,
+        "neck_base": neck_y,
+        "hip_center": hip_y,
+    }.items():
+        if name in out:
+            out[name]["x"] = blend(out[name].get("x", center_x), center_x)
+            out[name]["y"] = blend(out[name].get("y", yv), yv)
+
+    # Bilateral points with taper from shoulders to ankles.
+    for l_name, r_name, yv, half_w in [
+        ("left_shoulder", "right_shoulder", shoulder_y, shoulder_half),
+        ("left_hip", "right_hip", hip_y, hip_half),
+        ("left_knee", "right_knee", knee_y, knee_half),
+        ("left_ankle", "right_ankle", ankle_y, ankle_half),
+    ]:
+        if l_name in out:
+            out[l_name]["x"] = blend(out[l_name].get("x", center_x - half_w), center_x - half_w)
+            out[l_name]["y"] = blend(out[l_name].get("y", yv), yv)
+        if r_name in out:
+            out[r_name]["x"] = blend(out[r_name].get("x", center_x + half_w), center_x + half_w)
+            out[r_name]["y"] = blend(out[r_name].get("y", yv), yv)
+
+    # Keep elbow/wrist/toe tied to nearby joints while preserving existing asymmetry lightly.
+    for elbow, shoulder, hip in [
+        ("left_elbow", "left_shoulder", "left_hip"),
+        ("right_elbow", "right_shoulder", "right_hip"),
+    ]:
+        if elbow in out and shoulder in out and hip in out:
+            target_y = (float(out[shoulder]["y"]) + float(out[hip]["y"])) * 0.55
+            out[elbow]["y"] = blend(out[elbow].get("y", target_y), target_y)
+
+    for wrist, elbow, knee in [
+        ("left_wrist", "left_elbow", "left_knee"),
+        ("right_wrist", "right_elbow", "right_knee"),
+    ]:
+        if wrist in out and elbow in out and knee in out:
+            target_y = (float(out[elbow]["y"]) + float(out[knee]["y"])) * 0.52
+            out[wrist]["y"] = blend(out[wrist].get("y", target_y), target_y)
+
+    for toe, ankle, sign in [
+        ("left_toe", "left_ankle", -1.0),
+        ("right_toe", "right_ankle", 1.0),
+    ]:
+        if toe in out and ankle in out:
+            out[toe]["y"] = blend(out[toe].get("y", ankle_y + body_h * 0.04), ankle_y + body_h * 0.04)
+            out[toe]["x"] = blend(out[toe].get("x", out[ankle]["x"] + sign * ankle_half * 0.7), out[ankle]["x"] + sign * ankle_half * 0.7)
+
+    return out, {
+        "applied": True,
+        "alpha": alpha,
+        "phi": phi,
+        "center_x": center_x,
+        "body_height": body_h,
+    }
+
+
+def _elbow_angle_deg(shoulder: dict, elbow: dict, wrist: dict) -> float:
+    v1 = (float(shoulder.get("x", 0.0)) - float(elbow.get("x", 0.0)), float(shoulder.get("y", 0.0)) - float(elbow.get("y", 0.0)))
+    v2 = (float(wrist.get("x", 0.0)) - float(elbow.get("x", 0.0)), float(wrist.get("y", 0.0)) - float(elbow.get("y", 0.0)))
+    n1 = (v1[0] * v1[0] + v1[1] * v1[1]) ** 0.5
+    n2 = (v2[0] * v2[0] + v2[1] * v2[1]) ** 0.5
+    if n1 < 1e-6 or n2 < 1e-6:
+        return 180.0
+    c = max(-1.0, min(1.0, (v1[0] * v2[0] + v1[1] * v2[1]) / (n1 * n2)))
+    import math
+    return float(math.degrees(math.acos(c)))
+
+
+def _joint_angle_deg(a: dict, b: dict, c: dict) -> float:
+    v1 = (float(a.get("x", 0.0)) - float(b.get("x", 0.0)), float(a.get("y", 0.0)) - float(b.get("y", 0.0)))
+    v2 = (float(c.get("x", 0.0)) - float(b.get("x", 0.0)), float(c.get("y", 0.0)) - float(b.get("y", 0.0)))
+    n1 = (v1[0] * v1[0] + v1[1] * v1[1]) ** 0.5
+    n2 = (v2[0] * v2[0] + v2[1] * v2[1]) ** 0.5
+    if n1 < 1e-6 or n2 < 1e-6:
+        return 180.0
+    ccos = max(-1.0, min(1.0, (v1[0] * v2[0] + v1[1] * v2[1]) / (n1 * n2)))
+    import math
+    return float(math.degrees(math.acos(ccos)))
+
+
+def _classify_arm_side_pose(side: str, kp: dict[str, dict]) -> dict:
+    shoulder = kp.get(f"{side}_shoulder") or {}
+    elbow = kp.get(f"{side}_elbow") or {}
+    wrist = kp.get(f"{side}_wrist") or {}
+    dx = float(wrist.get("x", 0.0)) - float(shoulder.get("x", 0.0))
+    dy = float(wrist.get("y", 0.0)) - float(shoulder.get("y", 0.0))
+    angle = _elbow_angle_deg(shoulder, elbow, wrist)
+    straight = angle >= 150.0
+    if dy < -0.03:
+        orient = "up"
+    elif abs(dx) > abs(dy) * 1.2 and abs(dy) < 0.12:
+        orient = "side"
+    elif dy > 0.14:
+        orient = "down"
+    else:
+        orient = "front"
+    return {
+        "label": f"{side}_{orient}_{'straight' if straight else 'bent'}",
+        "orientation": orient,
+        "straight": straight,
+        "elbow_angle": angle,
+    }
+
+
+def _arm_pose_pair_label(kp: dict[str, dict]) -> dict:
+    left = _classify_arm_side_pose("left", kp)
+    right = _classify_arm_side_pose("right", kp)
+    return {
+        "left": left,
+        "right": right,
+        "pair": f"{left['label']} | {right['label']}",
+    }
+
+
+ARM_POSE_CATALOG: list[dict] = [
+    {"id": "arms_slightly_apart", "label": "Brazos ligeramente separados del cuerpo", "frequency": "alta"},
+    {"id": "arms_relaxed_hanging", "label": "Brazos relajados (colgando)", "frequency": "alta"},
+    {"id": "hands_on_waist", "label": "Manos en la cintura", "frequency": "alta"},
+    {"id": "hands_in_pockets", "label": "Manos en bolsillos", "frequency": "alta"},
+    {"id": "one_relaxed_one_action", "label": "Un brazo relajado y otro en accion", "frequency": "alta"},
+    {"id": "holding_garment", "label": "Sujetando la prenda", "frequency": "media"},
+    {"id": "adjusting_garment", "label": "Ajustando la prenda", "frequency": "media"},
+    {"id": "walking_motion", "label": "Brazos en movimiento (caminata)", "frequency": "media"},
+    {"id": "one_forward_one_back", "label": "Un brazo adelantado y otro retrasado", "frequency": "media"},
+    {"id": "semi_flexed", "label": "Brazos semiflexionados", "frequency": "media"},
+    {"id": "arms_back", "label": "Brazos hacia atras", "frequency": "media"},
+    {"id": "lateral_extended", "label": "Brazos extendidos lateralmente", "frequency": "baja"},
+    {"id": "one_crossing_torso", "label": "Un brazo cruzando el torso (ligero)", "frequency": "baja"},
+    {"id": "arms_crossed", "label": "Brazos cruzados", "frequency": "baja"},
+    {"id": "one_hand_face_neck", "label": "Una mano en el rostro o cuello", "frequency": "baja"},
+    {"id": "one_arm_raised", "label": "Un brazo levantado", "frequency": "baja"},
+    {"id": "both_arms_raised", "label": "Brazos elevados (ambos)", "frequency": "baja"},
+    {"id": "a_pose", "label": "A-Pose (brazos inclinados)", "frequency": "tecnica"},
+    {"id": "t_pose", "label": "T-Pose (brazos horizontales)", "frequency": "tecnica"},
+    {"id": "arms_close_to_body", "label": "Brazos pegados al cuerpo", "frequency": "tecnica"},
+    {"id": "arms_straight_rigid", "label": "Brazos rectos rigidos", "frequency": "tecnica"},
+]
+
+
+LEG_FOOT_POSE_CATALOG: list[dict] = [
+    {"id": "legs_straight_parallel", "label": "Piernas rectas paralelas", "frequency": "alta"},
+    {"id": "legs_slightly_apart", "label": "Piernas ligeramente separadas", "frequency": "alta"},
+    {"id": "weight_evenly_distributed", "label": "Peso distribuido en ambas piernas", "frequency": "alta"},
+    {"id": "contrapposto", "label": "Peso en una pierna (contrapposto)", "frequency": "alta"},
+    {"id": "front_leg", "label": "Pierna adelantada", "frequency": "media"},
+    {"id": "crossed_front", "label": "Pierna cruzada al frente", "frequency": "media"},
+    {"id": "crossed_back", "label": "Pierna cruzada atras", "frequency": "media"},
+    {"id": "wide_base", "label": "Piernas abiertas (base amplia)", "frequency": "media"},
+    {"id": "one_knee_slightly_bent", "label": "Una rodilla ligeramente flexionada", "frequency": "alta"},
+    {"id": "both_knees_semiflexed", "label": "Ambas rodillas semiflexionadas", "frequency": "media"},
+    {"id": "one_leg_lateral_extended", "label": "Pierna extendida lateralmente", "frequency": "baja"},
+    {"id": "walking_step", "label": "Paso en movimiento (caminar)", "frequency": "media"},
+    {"id": "heel_raised", "label": "Talon levantado", "frequency": "media"},
+    {"id": "leg_backward", "label": "Pierna en retroceso", "frequency": "media"},
+    {"id": "marked_crossed", "label": "Piernas cruzadas marcadas", "frequency": "baja"},
+    {"id": "tiptoe_support", "label": "Apoyo en puntas (tipo ballet ligero)", "frequency": "baja"},
+    {"id": "knees_together_feet_apart", "label": "Rodillas juntas y pies separados", "frequency": "baja"},
+    {"id": "a_pose_lower", "label": "Piernas en A (A-Pose inferior)", "frequency": "tecnica"},
+    {"id": "legs_straight_rigid", "label": "Piernas totalmente rectas rigidas", "frequency": "tecnica"},
+    {"id": "legs_fully_together", "label": "Piernas completamente juntas", "frequency": "tecnica"},
+]
+
+
+def _arm_pose_catalog_index() -> dict[str, dict]:
+    return {str(x["id"]): x for x in ARM_POSE_CATALOG}
+
+
+def _leg_pose_catalog_index() -> dict[str, dict]:
+    return {str(x["id"]): x for x in LEG_FOOT_POSE_CATALOG}
+
+
+def _torso_thickness_bucket(ratio: float) -> str:
+    if ratio < 0.33:
+        return "delgado"
+    if ratio < 0.46:
+        return "medio"
+    return "ancho"
+
+
+def _analyze_torso_and_arm_fold(kp: dict[str, dict]) -> dict:
+    k = _normalize_keypoint_map(kp, force_visible=True)
+    ls, rs = k["left_shoulder"], k["right_shoulder"]
+    lh, rh = k["left_hip"], k["right_hip"]
+    neck, hipc = k["neck_base"], k["hip_center"]
+    le, re = k["left_elbow"], k["right_elbow"]
+    lw, rw = k["left_wrist"], k["right_wrist"]
+
+    shoulder_w = abs(float(rs["x"]) - float(ls["x"]))
+    hip_w = abs(float(rh["x"]) - float(lh["x"]))
+    torso_h = max(1e-6, abs(float(hipc["y"]) - float(neck["y"])))
+    torso_thickness = (shoulder_w + hip_w) / 2.0
+    torso_ratio = torso_thickness / torso_h
+
+    left_elbow_angle = _elbow_angle_deg(ls, le, lw)
+    right_elbow_angle = _elbow_angle_deg(rs, re, rw)
+    left_fold_deg = max(0.0, 180.0 - left_elbow_angle)
+    right_fold_deg = max(0.0, 180.0 - right_elbow_angle)
+
+    def _fold_level(deg: float) -> str:
+        if deg < 20.0:
+            return "leve"
+        if deg < 45.0:
+            return "medio"
+        return "marcado"
+
+    return {
+        "torso": {
+            "shoulder_width": shoulder_w,
+            "hip_width": hip_w,
+            "torso_height": torso_h,
+            "thickness": torso_thickness,
+            "thickness_ratio": torso_ratio,
+            "thickness_bucket": _torso_thickness_bucket(torso_ratio),
+        },
+        "arm_fold": {
+            "left_elbow_angle": left_elbow_angle,
+            "right_elbow_angle": right_elbow_angle,
+            "left_fold_deg": left_fold_deg,
+            "right_fold_deg": right_fold_deg,
+            "left_fold_level": _fold_level(left_fold_deg),
+            "right_fold_level": _fold_level(right_fold_deg),
+            "avg_fold_deg": (left_fold_deg + right_fold_deg) / 2.0,
+        },
+    }
+
+
+def _recognize_arm_pose_catalog(kp: dict[str, dict]) -> dict:
+    """Heuristic classifier for 21 arm pose categories with ranked candidates."""
+    k = _normalize_keypoint_map(kp, force_visible=True)
+    ls, rs = k["left_shoulder"], k["right_shoulder"]
+    le, re = k["left_elbow"], k["right_elbow"]
+    lw, rw = k["left_wrist"], k["right_wrist"]
+    lh, rh = k["left_hip"], k["right_hip"]
+    neck, chin = k["neck_base"], k["chin"]
+
+    sh_w = max(1e-6, abs(float(rs["x"]) - float(ls["x"])))
+    torso_h = max(1e-6, abs(float(k["hip_center"]["y"]) - float(neck["y"])))
+    body_arm = _analyze_torso_and_arm_fold(k)
+    left_ang = float(body_arm["arm_fold"]["left_elbow_angle"])
+    right_ang = float(body_arm["arm_fold"]["right_elbow_angle"])
+    both_straight = left_ang >= 160 and right_ang >= 160
+    both_bent = left_ang < 145 and right_ang < 145
+
+    left_up = float(lw["y"]) < float(ls["y"]) - 0.03
+    right_up = float(rw["y"]) < float(rs["y"]) - 0.03
+    left_down = float(lw["y"]) > float(lh["y"]) - 0.02
+    right_down = float(rw["y"]) > float(rh["y"]) - 0.02
+
+    left_outer = float(lw["x"]) < float(ls["x"]) - 0.10 * sh_w
+    right_outer = float(rw["x"]) > float(rs["x"]) + 0.10 * sh_w
+    arms_apart = left_outer and right_outer
+
+    wrists_close_waist = (abs(float(lw["y"]) - float(lh["y"])) < 0.09 * torso_h and abs(float(rw["y"]) - float(rh["y"])) < 0.09 * torso_h)
+    wrists_near_center = (abs(float(lw["x"]) - float(k["hip_center"]["x"])) < 0.28 * sh_w and abs(float(rw["x"]) - float(k["hip_center"]["x"])) < 0.28 * sh_w)
+
+    crossed = float(lw["x"]) > float(k["hip_center"]["x"]) and float(rw["x"]) < float(k["hip_center"]["x"])
+    one_cross = (float(lw["x"]) > float(k["hip_center"]["x"]) > float(ls["x"])) ^ (float(rw["x"]) < float(k["hip_center"]["x"]) < float(rs["x"]))
+
+    near_face = (abs(float(lw["y"]) - float(chin["y"])) < 0.16 * torso_h or abs(float(rw["y"]) - float(chin["y"])) < 0.16 * torso_h)
+    t_like = both_straight and abs(float(lw["y"]) - float(ls["y"])) < 0.08 * torso_h and abs(float(rw["y"]) - float(rs["y"])) < 0.08 * torso_h and arms_apart
+    a_like = both_straight and float(lw["y"]) > float(ls["y"]) and float(rw["y"]) > float(rs["y"]) and arms_apart
+    rigid = both_straight and abs(float(lw["x"]) - float(ls["x"])) < 0.10 * sh_w and abs(float(rw["x"]) - float(rs["x"])) < 0.10 * sh_w
+    close_body = abs(float(lw["x"]) - float(ls["x"])) < 0.18 * sh_w and abs(float(rw["x"]) - float(rs["x"])) < 0.18 * sh_w and left_down and right_down
+
+    scores: dict[str, float] = {item["id"]: 0.0 for item in ARM_POSE_CATALOG}
+    def add(pid: str, val: float):
+        scores[pid] = scores.get(pid, 0.0) + float(val)
+
+    if arms_apart and left_down and right_down: add("arms_slightly_apart", 1.3)
+    if left_down and right_down and both_bent: add("arms_relaxed_hanging", 1.2)
+    if wrists_close_waist and wrists_near_center: add("hands_on_waist", 1.4)
+    if wrists_close_waist and both_bent: add("hands_in_pockets", 1.0)
+    if (left_down and right_up) or (right_down and left_up): add("one_relaxed_one_action", 1.1)
+    if abs(float(lw["y"]) - float(neck["y"])) < 0.18 * torso_h or abs(float(rw["y"]) - float(neck["y"])) < 0.18 * torso_h: add("holding_garment", 0.9)
+    if both_bent and wrists_near_center: add("adjusting_garment", 0.95)
+    if (float(lw["x"]) - float(ls["x"])) * (float(rw["x"]) - float(rs["x"])) < 0: add("walking_motion", 0.9)
+    if (float(lw["x"]) - float(ls["x"])) * (float(rw["x"]) - float(rs["x"])) < 0 and both_straight: add("one_forward_one_back", 0.85)
+    if left_ang < 155 and right_ang < 155: add("semi_flexed", 1.0)
+    if float(lw["x"]) > float(ls["x"]) and float(rw["x"]) < float(rs["x"]) and left_down and right_down: add("arms_back", 0.8)
+    if t_like: add("lateral_extended", 1.2)
+    if one_cross: add("one_crossing_torso", 1.1)
+    if crossed: add("arms_crossed", 1.3)
+    if near_face: add("one_hand_face_neck", 1.2)
+    if (left_up ^ right_up): add("one_arm_raised", 1.15)
+    if left_up and right_up: add("both_arms_raised", 1.3)
+    if a_like: add("a_pose", 1.4)
+    if t_like: add("t_pose", 1.5)
+    if close_body: add("arms_close_to_body", 1.1)
+    if rigid: add("arms_straight_rigid", 1.0)
+    if float(body_arm["arm_fold"]["avg_fold_deg"]) >= 45.0:
+        add("semi_flexed", 0.35)
+        add("adjusting_garment", 0.25)
+
+    # Soft defaults for common catalog poses
+    if scores["arms_relaxed_hanging"] == 0 and left_down and right_down:
+        add("arms_relaxed_hanging", 0.6)
+    if scores["arms_slightly_apart"] == 0 and arms_apart:
+        add("arms_slightly_apart", 0.5)
+
+    ranking = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    idx = _arm_pose_catalog_index()
+    candidates = [
+        {
+            "id": pid,
+            "label": idx.get(pid, {}).get("label", pid),
+            "frequency": idx.get(pid, {}).get("frequency", "desconocida"),
+            "score": sc,
+        }
+        for pid, sc in ranking[:5]
+    ]
+    top = candidates[0] if candidates else None
+    return {
+        "top": top,
+        "candidates": candidates,
+        "features": {
+            "left_elbow_angle": left_ang,
+            "right_elbow_angle": right_ang,
+            "left_fold_deg": float(body_arm["arm_fold"]["left_fold_deg"]),
+            "right_fold_deg": float(body_arm["arm_fold"]["right_fold_deg"]),
+            "torso_thickness": float(body_arm["torso"]["thickness"]),
+            "torso_thickness_ratio": float(body_arm["torso"]["thickness_ratio"]),
+            "torso_thickness_bucket": str(body_arm["torso"]["thickness_bucket"]),
+            "arms_apart": arms_apart,
+            "crossed": crossed,
+            "left_up": left_up,
+            "right_up": right_up,
+            "t_like": t_like,
+            "a_like": a_like,
+        },
+    }
+
+
+def _recognize_leg_foot_pose_catalog(kp: dict[str, dict]) -> dict:
+    k = _normalize_keypoint_map(kp, force_visible=True)
+    lh, rh = k["left_hip"], k["right_hip"]
+    lk, rk = k["left_knee"], k["right_knee"]
+    la, ra = k["left_ankle"], k["right_ankle"]
+    lt, rt = k["left_toe"], k["right_toe"]
+
+    hip_w = max(1e-6, abs(float(rh["x"]) - float(lh["x"])))
+    leg_h = max(1e-6, (abs(float(la["y"]) - float(lh["y"])) + abs(float(ra["y"]) - float(rh["y"]))) / 2.0)
+    knee_gap = abs(float(rk["x"]) - float(lk["x"]))
+    ankle_gap = abs(float(ra["x"]) - float(la["x"]))
+    foot_gap = abs(float(rt["x"]) - float(lt["x"]))
+
+    left_knee_angle = _joint_angle_deg(lh, lk, la)
+    right_knee_angle = _joint_angle_deg(rh, rk, ra)
+    both_straight = left_knee_angle >= 167.0 and right_knee_angle >= 167.0
+    one_bent = (left_knee_angle < 160.0) ^ (right_knee_angle < 160.0)
+    both_semiflex = left_knee_angle < 165.0 and right_knee_angle < 165.0
+
+    left_heel_up = abs(float(lt["y"]) - float(la["y"])) < 0.02 * leg_h
+    right_heel_up = abs(float(rt["y"]) - float(ra["y"])) < 0.02 * leg_h
+    heel_raised = left_heel_up ^ right_heel_up
+    tiptoe = left_heel_up and right_heel_up
+
+    ankles_crossed = (float(la["x"]) > float(ra["x"])) and (float(lh["x"]) < float(rh["x"]))
+    cross_strength = abs(float(la["x"]) - float(ra["x"])) / max(hip_w, 1e-6)
+    marked_cross = ankles_crossed and cross_strength > 0.30
+
+    one_leg_forward = abs(float(la["y"]) - float(ra["y"])) > 0.08 * leg_h
+    one_leg_lateral = (float(la["x"]) < float(lh["x"]) - 0.28 * hip_w) or (float(ra["x"]) > float(rh["x"]) + 0.28 * hip_w)
+    wide_base = ankle_gap > 1.45 * hip_w
+    slightly_apart = ankle_gap > 0.95 * hip_w
+    fully_together = ankle_gap < 0.35 * hip_w and knee_gap < 0.45 * hip_w
+    knees_together_feet_apart = knee_gap < 0.40 * hip_w and foot_gap > 0.70 * hip_w
+    contrapposto = one_bent and abs(float(lh["y"]) - float(rh["y"])) > 0.02 * leg_h
+    a_pose_lower = both_straight and ankle_gap > 1.05 * hip_w and ankle_gap < 1.45 * hip_w
+    rigid = both_straight and abs(float(lk["x"]) - float(lh["x"])) < 0.12 * hip_w and abs(float(rk["x"]) - float(rh["x"])) < 0.12 * hip_w
+
+    scores: dict[str, float] = {item["id"]: 0.0 for item in LEG_FOOT_POSE_CATALOG}
+    def add(pid: str, val: float):
+        scores[pid] = scores.get(pid, 0.0) + float(val)
+
+    if both_straight and ankle_gap >= 0.85 * hip_w and ankle_gap <= 1.15 * hip_w:
+        add("legs_straight_parallel", 1.3)
+    if slightly_apart:
+        add("legs_slightly_apart", 1.2)
+    if not one_bent and abs(float(lh["y"]) - float(rh["y"])) < 0.02 * leg_h:
+        add("weight_evenly_distributed", 1.1)
+    if contrapposto:
+        add("contrapposto", 1.3)
+    if one_leg_forward and not ankles_crossed:
+        add("front_leg", 1.1)
+    if ankles_crossed and (float(la["y"]) < float(ra["y"])):
+        add("crossed_front", 1.0)
+    if ankles_crossed and (float(la["y"]) >= float(ra["y"])):
+        add("crossed_back", 0.95)
+    if wide_base:
+        add("wide_base", 1.25)
+    if one_bent:
+        add("one_knee_slightly_bent", 1.25)
+    if both_semiflex:
+        add("both_knees_semiflexed", 1.2)
+    if one_leg_lateral:
+        add("one_leg_lateral_extended", 1.25)
+    if one_leg_forward and one_bent:
+        add("walking_step", 1.05)
+    if heel_raised:
+        add("heel_raised", 1.25)
+    if one_leg_forward and (float(la["y"]) > float(ra["y"]) + 0.08 * leg_h or float(ra["y"]) > float(la["y"]) + 0.08 * leg_h):
+        add("leg_backward", 0.95)
+    if marked_cross:
+        add("marked_crossed", 1.35)
+    if tiptoe:
+        add("tiptoe_support", 1.35)
+    if knees_together_feet_apart:
+        add("knees_together_feet_apart", 1.25)
+    if a_pose_lower:
+        add("a_pose_lower", 1.2)
+    if rigid:
+        add("legs_straight_rigid", 1.0)
+    if fully_together:
+        add("legs_fully_together", 1.2)
+
+    if scores["legs_slightly_apart"] == 0 and ankle_gap > 0.80 * hip_w:
+        add("legs_slightly_apart", 0.6)
+    if scores["weight_evenly_distributed"] == 0 and not one_bent:
+        add("weight_evenly_distributed", 0.5)
+
+    ranking = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    idx = _leg_pose_catalog_index()
+    candidates = [
+        {
+            "id": pid,
+            "label": idx.get(pid, {}).get("label", pid),
+            "frequency": idx.get(pid, {}).get("frequency", "desconocida"),
+            "score": sc,
+        }
+        for pid, sc in ranking[:5]
+    ]
+    top = candidates[0] if candidates else None
+    return {
+        "top": top,
+        "candidates": candidates,
+        "features": {
+            "left_knee_angle": left_knee_angle,
+            "right_knee_angle": right_knee_angle,
+            "ankle_gap": ankle_gap,
+            "knee_gap": knee_gap,
+            "one_bent": one_bent,
+            "both_straight": both_straight,
+            "heels_raised": heel_raised,
+            "crossed": ankles_crossed,
+            "wide_base": wide_base,
+            "tiptoe": tiptoe,
+        },
+    }
+
+
+def _build_arm_pose_prototypes(samples: list[dict]) -> dict:
+    arm_points = [
+        "left_shoulder", "right_shoulder",
+        "left_elbow", "right_elbow",
+        "left_wrist", "right_wrist",
+        "left_hand_tip", "right_hand_tip",
+    ]
+    groups: dict[str, list[dict]] = {}
+    for item in samples:
+        kp = _normalize_keypoint_map(item.get("target") or item.get("keypoints") or {}, force_visible=True)
+        label = _arm_pose_pair_label(kp)["pair"]
+        groups.setdefault(label, []).append(kp)
+
+    prototypes: dict[str, dict] = {}
+    for label, arr in groups.items():
+        proto: dict[str, dict] = {}
+        n = float(len(arr))
+        for name in arm_points:
+            x = sum(float(k[name]["x"]) for k in arr) / n
+            y = sum(float(k[name]["y"]) for k in arr) / n
+            proto[name] = {"x": x, "y": y, "visible": True, "optional": "hand_tip" in name}
+        prototypes[label] = {
+            "count": len(arr),
+            "keypoints": proto,
+        }
+    return prototypes
+
+def _build_arm_pose_catalog_prototypes(samples: list[dict]) -> dict:
+    arm_points = [
+        "left_shoulder", "right_shoulder",
+        "left_elbow", "right_elbow",
+        "left_wrist", "right_wrist",
+        "left_hand_tip", "right_hand_tip",
+    ]
+    groups: dict[str, list[dict]] = {}
+    for item in samples:
+        kp = _normalize_keypoint_map(item.get("target") or item.get("keypoints") or {}, force_visible=True)
+        rec = _recognize_arm_pose_catalog(kp)
+        top = rec.get("top") or {}
+        pose_id = str(top.get("id") or "")
+        if not pose_id:
+            continue
+        groups.setdefault(pose_id, []).append(kp)
+
+    prototypes: dict[str, dict] = {}
+    for pose_id, arr in groups.items():
+        proto: dict[str, dict] = {}
+        n = float(len(arr))
+        for name in arm_points:
+            x = sum(float(k[name]["x"]) for k in arr) / n
+            y = sum(float(k[name]["y"]) for k in arr) / n
+            proto[name] = {"x": x, "y": y, "visible": True, "optional": "hand_tip" in name}
+        prototypes[pose_id] = {
+            "count": len(arr),
+            "keypoints": proto,
+        }
+    return prototypes
+
+
+def _build_leg_pose_catalog_prototypes(samples: list[dict]) -> dict:
+    leg_points = [
+        "left_hip", "right_hip",
+        "left_knee", "right_knee",
+        "left_ankle", "right_ankle",
+        "left_toe", "right_toe",
+    ]
+    groups: dict[str, list[dict]] = {}
+    for item in samples:
+        kp = _normalize_keypoint_map(item.get("target") or item.get("keypoints") or {}, force_visible=True)
+        rec = _recognize_leg_foot_pose_catalog(kp)
+        top = rec.get("top") or {}
+        pose_id = str(top.get("id") or "")
+        if not pose_id:
+            continue
+        groups.setdefault(pose_id, []).append(kp)
+
+    prototypes: dict[str, dict] = {}
+    for pose_id, arr in groups.items():
+        proto: dict[str, dict] = {}
+        n = float(len(arr))
+        for name in leg_points:
+            x = sum(float(k[name]["x"]) for k in arr) / n
+            y = sum(float(k[name]["y"]) for k in arr) / n
+            proto[name] = {"x": x, "y": y, "visible": True, "optional": "toe" in name}
+        prototypes[pose_id] = {
+            "count": len(arr),
+            "keypoints": proto,
+        }
+    return prototypes
+
+
+def _apply_arm_pose_prior(kp: dict[str, dict], model: dict, alpha: float = 0.40) -> tuple[dict[str, dict], dict]:
+    if alpha <= 0.0:
+        return kp, {"applied": False, "reason": "alpha_zero"}
+
+    out = _normalize_keypoint_map(kp, force_visible=True)
+    prototypes = (model.get("arm_pose_prototypes") or {})
+    catalog_prototypes = (model.get("arm_pose_catalog_prototypes") or {})
+    arm_points = [
+        "left_shoulder", "right_shoulder",
+        "left_elbow", "right_elbow",
+        "left_wrist", "right_wrist",
+        "left_hand_tip", "right_hand_tip",
+    ]
+
+    rec = _recognize_arm_pose_catalog(out)
+    body_arm = _analyze_torso_and_arm_fold(out)
+    top_pose = rec.get("top") or {}
+    top_pose_id = str(top_pose.get("id") or "")
+    top_pose_label = str(top_pose.get("label") or "")
+
+    # Find nearest prototype by arm keypoint L2.
+    best_label = None
+    best_score = None
+    chosen_proto = None
+    chosen_mode = None
+
+    if top_pose_id and isinstance(catalog_prototypes, dict) and top_pose_id in catalog_prototypes:
+        chosen_proto = catalog_prototypes[top_pose_id].get("keypoints") or {}
+        best_label = top_pose_label or top_pose_id
+        chosen_mode = "catalog"
+
+    if not chosen_proto:
+        for label, item in prototypes.items():
+            p = item.get("keypoints") or {}
+            vals = []
+            for name in arm_points:
+                if name not in p:
+                    continue
+                vals.append(_point_dist(out.get(name, {}), p[name]))
+            if not vals:
+                continue
+            score = sum(vals) / len(vals)
+            if best_score is None or score < best_score:
+                best_score = score
+                best_label = label
+        if best_label:
+            chosen_proto = prototypes[best_label]["keypoints"]
+            chosen_mode = "nearest_pair"
+
+    adaptive_alpha = float(alpha)
+    avg_fold = float(body_arm["arm_fold"]["avg_fold_deg"])
+    if avg_fold >= 45.0:
+        adaptive_alpha = min(0.85, float(alpha) + 0.08)
+    if chosen_proto:
+        for name in arm_points:
+            if name not in chosen_proto:
+                continue
+            out[name]["x"] = _clamp01((1.0 - adaptive_alpha) * float(out[name]["x"]) + adaptive_alpha * float(chosen_proto[name]["x"]))
+            out[name]["y"] = _clamp01((1.0 - adaptive_alpha) * float(out[name]["y"]) + adaptive_alpha * float(chosen_proto[name]["y"]))
+
+    # Golden-size consistency check for arms: if mismatch but elbow angle is bent, keep bend.
+    phi = 1.61803398875
+    torso_h = max(0.08, float(out["hip_center"]["y"]) - float(out["neck_base"]["y"]))
+    expected_upper = torso_h / phi
+    expected_lower = expected_upper / phi
+
+    bent_flags: dict[str, bool] = {}
+    for side, sign in [("left", -1.0), ("right", 1.0)]:
+        s = out[f"{side}_shoulder"]
+        e = out[f"{side}_elbow"]
+        w = out[f"{side}_wrist"]
+        upper = _point_dist(s, e)
+        lower = _point_dist(e, w)
+        angle = _elbow_angle_deg(s, e, w)
+        mismatch = (abs(upper - expected_upper) / max(expected_upper, 1e-6) > 0.35) or (abs(lower - expected_lower) / max(expected_lower, 1e-6) > 0.35)
+        bent = mismatch and angle < 150.0
+        bent_flags[side] = bent
+
+        # If straight and very off expected length, softly normalize chain length.
+        if (not bent) and angle >= 150.0:
+            import math
+            vx = float(w["x"]) - float(s["x"])
+            vy = float(w["y"]) - float(s["y"])
+            n = math.hypot(vx, vy)
+            if n > 1e-6:
+                ux, uy = vx / n, vy / n
+                target_e = {
+                    "x": float(s["x"]) + ux * expected_upper,
+                    "y": float(s["y"]) + uy * expected_upper,
+                }
+                target_w = {
+                    "x": float(target_e["x"]) + ux * expected_lower,
+                    "y": float(target_e["y"]) + uy * expected_lower,
+                }
+                out[f"{side}_elbow"]["x"] = _clamp01((1.0 - alpha) * float(out[f"{side}_elbow"]["x"]) + alpha * target_e["x"])
+                out[f"{side}_elbow"]["y"] = _clamp01((1.0 - alpha) * float(out[f"{side}_elbow"]["y"]) + alpha * target_e["y"])
+                out[f"{side}_wrist"]["x"] = _clamp01((1.0 - alpha) * float(out[f"{side}_wrist"]["x"]) + alpha * target_w["x"])
+                out[f"{side}_wrist"]["y"] = _clamp01((1.0 - alpha) * float(out[f"{side}_wrist"]["y"]) + alpha * target_w["y"])
+                out[f"{side}_hand_tip"]["x"] = _clamp01((1.0 - alpha) * float(out[f"{side}_hand_tip"]["x"]) + alpha * (float(target_w["x"]) + sign * expected_lower * 0.2))
+                out[f"{side}_hand_tip"]["y"] = _clamp01((1.0 - alpha) * float(out[f"{side}_hand_tip"]["y"]) + alpha * (float(target_w["y"]) + expected_lower * 0.12))
+
+    return out, {
+        "applied": True,
+        "alpha": alpha,
+        "adaptive_alpha": adaptive_alpha,
+        "prototype_label": best_label,
+        "prototype_mode": chosen_mode,
+        "prototype_score": best_score,
+        "bent_flags": bent_flags,
+        "torso_and_arm_fold": body_arm,
+        "catalog_recognition": rec,
+    }
+
+
+def _apply_leg_pose_prior(kp: dict[str, dict], model: dict, alpha: float = 0.35) -> tuple[dict[str, dict], dict]:
+    if alpha <= 0.0:
+        return kp, {"applied": False, "reason": "alpha_zero"}
+
+    out = _normalize_keypoint_map(kp, force_visible=True)
+    leg_points = [
+        "left_hip", "right_hip",
+        "left_knee", "right_knee",
+        "left_ankle", "right_ankle",
+        "left_toe", "right_toe",
+    ]
+    prototypes = (model.get("leg_pose_catalog_prototypes") or {})
+    rec = _recognize_leg_foot_pose_catalog(out)
+    top_pose = rec.get("top") or {}
+    top_pose_id = str(top_pose.get("id") or "")
+    top_pose_label = str(top_pose.get("label") or "")
+
+    chosen_proto = None
+    chosen_label = None
+    chosen_mode = None
+    best_score = None
+
+    if top_pose_id and isinstance(prototypes, dict) and top_pose_id in prototypes:
+        chosen_proto = prototypes[top_pose_id].get("keypoints") or {}
+        chosen_label = top_pose_label or top_pose_id
+        chosen_mode = "catalog"
+
+    if not chosen_proto and isinstance(prototypes, dict):
+        for pose_id, item in prototypes.items():
+            p = item.get("keypoints") or {}
+            vals = []
+            for name in leg_points:
+                if name not in p:
+                    continue
+                vals.append(_point_dist(out.get(name, {}), p[name]))
+            if not vals:
+                continue
+            score = sum(vals) / len(vals)
+            if best_score is None or score < best_score:
+                best_score = score
+                chosen_label = str(pose_id)
+        if chosen_label and chosen_label in prototypes:
+            chosen_proto = prototypes[chosen_label].get("keypoints") or {}
+            chosen_mode = "nearest_catalog"
+
+    if chosen_proto:
+        for name in leg_points:
+            if name not in chosen_proto:
+                continue
+            out[name]["x"] = _clamp01((1.0 - alpha) * float(out[name]["x"]) + alpha * float(chosen_proto[name]["x"]))
+            out[name]["y"] = _clamp01((1.0 - alpha) * float(out[name]["y"]) + alpha * float(chosen_proto[name]["y"]))
+
+    return out, {
+        "applied": True,
+        "alpha": alpha,
+        "prototype_label": chosen_label,
+        "prototype_mode": chosen_mode,
+        "prototype_score": best_score,
+        "catalog_recognition": rec,
+    }
+
+
+def _predict_keypoints_from_base(base: dict[str, dict], model: dict) -> tuple[dict[str, dict], dict]:
+    pred = _apply_refiner(base, model)
+    priors = model.get("priors") or {}
+    meta: dict = {}
+    if bool(priors.get("enable_golden_ratio_prior", True)):
+        alpha = float(priors.get("golden_ratio_alpha", 0.35))
+        pred, prior_meta = _apply_golden_ratio_prior(pred, alpha=alpha)
+        meta["golden_ratio"] = prior_meta
+    else:
+        meta["golden_ratio"] = {"applied": False, "reason": "disabled"}
+
+    if bool(priors.get("enable_arm_pose_prior", True)):
+        arm_alpha = float(priors.get("arm_pose_alpha", 0.40))
+        pred, arm_meta = _apply_arm_pose_prior(pred, model=model, alpha=arm_alpha)
+        meta["arm_pose"] = arm_meta
+    else:
+        meta["arm_pose"] = {"applied": False, "reason": "disabled"}
+
+    if bool(priors.get("enable_leg_pose_prior", True)):
+        leg_alpha = float(priors.get("leg_pose_alpha", 0.35))
+        pred, leg_meta = _apply_leg_pose_prior(pred, model=model, alpha=leg_alpha)
+        meta["leg_pose"] = leg_meta
+    else:
+        meta["leg_pose"] = {"applied": False, "reason": "disabled"}
+
+    meta["body_shape"] = _analyze_torso_and_arm_fold(pred)
+
+    return pred, meta
+
+
 def _point_dist(a: dict, b: dict) -> float:
     dx = float(a.get("x", 0.0)) - float(b.get("x", 0.0))
     dy = float(a.get("y", 0.0)) - float(b.get("y", 0.0))
@@ -1842,6 +3830,8 @@ def _point_dist(a: dict, b: dict) -> float:
 
 
 def _evaluate_keypoints_against_target(pred: dict[str, dict], target: dict[str, dict]) -> dict:
+    pred = _normalize_keypoint_map(pred, force_visible=True)
+    target = _normalize_keypoint_map(target, force_visible=True)
     by_keypoint: dict[str, float] = {}
     values: list[float] = []
     for name in BODY_KEYPOINT_NAMES:
@@ -1888,7 +3878,7 @@ def _objective_samples_from_manifests(include_only_corrected: bool = True) -> li
             samples.append({
                 "sample_id": sample.get("sample_id"),
                 "image_name": sample.get("image_name"),
-                "keypoints": kp,
+                "keypoints": _normalize_keypoint_map(kp, force_visible=True),
             })
     return samples
 
@@ -1906,36 +3896,128 @@ def _load_objective_samples(use_snapshot: bool = True) -> tuple[list[dict], str]
     return _objective_samples_from_manifests(include_only_corrected=False), "live_manifests"
 
 
-def _iterative_refiner_train(epochs: int, learning_rate: float, reset_model: bool, use_objective_snapshot: bool) -> dict:
+def _iterative_refiner_train(
+    epochs: int,
+    learning_rate: float,
+    reset_model: bool,
+    use_objective_snapshot: bool,
+    update_only_erroneous_sections: bool,
+    section_error_threshold: float,
+    enable_golden_ratio_prior: bool,
+    golden_ratio_alpha: float,
+    enable_arm_pose_prior: bool,
+    arm_pose_alpha: float,
+    enable_leg_pose_prior: bool,
+    leg_pose_alpha: float,
+    enable_arm_pose_curriculum: bool,
+    curriculum_start_fraction: float,
+) -> dict:
     objective_samples, objective_source = _load_objective_samples(use_snapshot=use_objective_snapshot)
     if not objective_samples:
         raise ValueError("No hay keypoints objetivo guardados para entrenar")
 
+    # Precompute per-sample image analysis once (face/silhouette/pose) to avoid repeated expensive IO per epoch.
+    prepared_samples: list[dict] = []
+    for item in objective_samples:
+        sample_id = str(item.get("sample_id"))
+        target = _normalize_keypoint_map(item.get("keypoints") or {}, force_visible=True)
+        try:
+            manifest = _load_human_shape_sample_manifest(sample_id)
+        except Exception:
+            continue
+        base, _base_source, _base_params = _estimate_base_keypoints_for_manifest(manifest)
+        prepared_samples.append(
+            {
+                "sample_id": sample_id,
+                "target": target,
+                "base": base,
+            }
+        )
+
+    if not prepared_samples:
+        raise ValueError("No se pudieron preparar muestras para iterar")
+
     model = _load_keypoint_refiner_model()
+    model["arm_pose_prototypes"] = _build_arm_pose_prototypes(prepared_samples)
+    model["arm_pose_catalog_prototypes"] = _build_arm_pose_catalog_prototypes(prepared_samples)
+    model["leg_pose_catalog_prototypes"] = _build_leg_pose_catalog_prototypes(prepared_samples)
+    model["priors"] = {
+        "enable_golden_ratio_prior": bool(enable_golden_ratio_prior),
+        "golden_ratio_alpha": float(golden_ratio_alpha),
+        "enable_arm_pose_prior": bool(enable_arm_pose_prior),
+        "arm_pose_alpha": float(arm_pose_alpha),
+        "enable_leg_pose_prior": bool(enable_leg_pose_prior),
+        "leg_pose_alpha": float(leg_pose_alpha),
+    }
     if reset_model:
         model["offsets"] = _keypoint_template()
         model["iterations"] = 0
 
     epoch_reports: list[dict] = []
 
+    # Curriculum: start with samples whose current arm pose already matches better; then progressively add harder ones.
+    sample_arm_error: list[tuple[float, dict]] = []
+    for item in prepared_samples:
+        pred0, _meta0 = _predict_keypoints_from_base(item["base"], model)
+        m0 = _evaluate_keypoints_against_target(pred0, item["target"])
+        per_part = m0.get("per_part_l2") or {}
+        arm_parts = [
+            "left_arm", "right_arm", "left_forearm", "right_forearm", "left_hand", "right_hand",
+        ]
+        vals = [float(per_part[p]) for p in arm_parts if p in per_part]
+        err = (sum(vals) / len(vals)) if vals else float(m0.get("mean_l2") or 0.0)
+        sample_arm_error.append((err, item))
+    sample_arm_error.sort(key=lambda x: x[0])
+
     for epoch_idx in range(1, epochs + 1):
         accum = {name: {"dx": 0.0, "dy": 0.0, "n": 0} for name in BODY_KEYPOINT_NAMES}
         eval_before: list[float] = []
+        part_before_accum: dict[str, list[float]] = {str(p["id"]): [] for p in BODY_PARTS_SEGMENTS}
+        part_after_accum: dict[str, list[float]] = {str(p["id"]): [] for p in BODY_PARTS_SEGMENTS}
+        section_updates_count: dict[str, int] = {str(p["id"]): 0 for p in BODY_PARTS_SEGMENTS}
 
-        for item in objective_samples:
-            sample_id = str(item.get("sample_id"))
-            target = item.get("keypoints") or {}
-            try:
-                manifest = _load_human_shape_sample_manifest(sample_id)
-            except Exception:
-                continue
-            base, _base_source = _estimate_base_keypoints_for_manifest(manifest)
-            pred = _apply_refiner(base, model)
+        if enable_arm_pose_curriculum and len(sample_arm_error) > 1:
+            frac = float(curriculum_start_fraction)
+            if epochs > 1:
+                frac = float(curriculum_start_fraction) + (1.0 - float(curriculum_start_fraction)) * ((epoch_idx - 1) / max(1, epochs - 1))
+            frac = max(0.1, min(1.0, frac))
+            use_n = max(1, min(len(sample_arm_error), int(round(frac * len(sample_arm_error)))))
+            epoch_samples = [it for _, it in sample_arm_error[:use_n]]
+        else:
+            frac = 1.0
+            epoch_samples = [it for _, it in sample_arm_error]
+
+        for item in epoch_samples:
+            target = item["target"]
+            base = item["base"]
+            pred, _pred_meta = _predict_keypoints_from_base(base, model)
             metrics = _evaluate_keypoints_against_target(pred, target)
             if metrics.get("mean_l2") is not None:
                 eval_before.append(float(metrics["mean_l2"]))
 
-            for name in BODY_KEYPOINT_NAMES:
+            per_part_l2 = metrics.get("per_part_l2") or {}
+            for part_id, err in per_part_l2.items():
+                part_before_accum.setdefault(str(part_id), []).append(float(err))
+
+            bad_parts: set[str] = set()
+            for part in BODY_PARTS_SEGMENTS:
+                part_id = str(part["id"])
+                err = per_part_l2.get(part_id)
+                if err is None:
+                    continue
+                if (not update_only_erroneous_sections) or (float(err) >= section_error_threshold):
+                    bad_parts.add(part_id)
+                    section_updates_count[part_id] = section_updates_count.get(part_id, 0) + 1
+
+            bad_keypoints: set[str] = set()
+            for part in BODY_PARTS_SEGMENTS:
+                part_id = str(part["id"])
+                if part_id not in bad_parts:
+                    continue
+                bad_keypoints.add(str(part["kp_a"]))
+                bad_keypoints.add(str(part["kp_b"]))
+
+            for name in bad_keypoints:
                 t = target.get(name)
                 p = pred.get(name)
                 if not t or not p:
@@ -1955,18 +4037,26 @@ def _iterative_refiner_train(epochs: int, learning_rate: float, reset_model: boo
             off["dy"] = float(off.get("dy", 0.0)) + learning_rate * mean_dy
 
         eval_after: list[float] = []
-        for item in objective_samples:
-            sample_id = str(item.get("sample_id"))
-            target = item.get("keypoints") or {}
-            try:
-                manifest = _load_human_shape_sample_manifest(sample_id)
-            except Exception:
-                continue
-            base, _base_source = _estimate_base_keypoints_for_manifest(manifest)
-            pred = _apply_refiner(base, model)
+        for item in epoch_samples:
+            target = item["target"]
+            base = item["base"]
+            pred, _pred_meta = _predict_keypoints_from_base(base, model)
             metrics = _evaluate_keypoints_against_target(pred, target)
             if metrics.get("mean_l2") is not None:
                 eval_after.append(float(metrics["mean_l2"]))
+            for part_id, err in (metrics.get("per_part_l2") or {}).items():
+                part_after_accum.setdefault(str(part_id), []).append(float(err))
+
+        part_mean_before = {
+            part_id: (sum(vals) / len(vals)) for part_id, vals in part_before_accum.items() if vals
+        }
+        part_mean_after = {
+            part_id: (sum(vals) / len(vals)) for part_id, vals in part_after_accum.items() if vals
+        }
+        part_improvement = {
+            part_id: part_mean_before[part_id] - part_mean_after[part_id]
+            for part_id in part_mean_before.keys() & part_mean_after.keys()
+        }
 
         before_mean = (sum(eval_before) / len(eval_before)) if eval_before else None
         after_mean = (sum(eval_after) / len(eval_after)) if eval_after else None
@@ -1977,6 +4067,15 @@ def _iterative_refiner_train(epochs: int, learning_rate: float, reset_model: boo
                 "mean_l2_before": before_mean,
                 "mean_l2_after": after_mean,
                 "improvement": (before_mean - after_mean) if before_mean is not None and after_mean is not None else None,
+                "section_error_threshold": section_error_threshold,
+                "update_only_erroneous_sections": update_only_erroneous_sections,
+                "sections_updated_counts": section_updates_count,
+                "mean_l2_by_section_before": part_mean_before,
+                "mean_l2_by_section_after": part_mean_after,
+                "section_improvement": part_improvement,
+                "curriculum_enabled": bool(enable_arm_pose_curriculum),
+                "curriculum_fraction": frac,
+                "curriculum_samples_used": len(epoch_samples),
             }
         )
 
@@ -1995,9 +4094,10 @@ def _iterative_refiner_train(epochs: int, learning_rate: float, reset_model: boo
     return {
         "status": "ok",
         "objective_source": objective_source,
-        "objective_samples": len(objective_samples),
+        "objective_samples": len(prepared_samples),
         "epochs": epochs,
         "learning_rate": learning_rate,
+        "priors": model.get("priors") or {},
         "epoch_reports": epoch_reports,
         "model": model,
     }
@@ -2179,7 +4279,7 @@ def human_shape_lab_parts() -> dict:
 
 
 @app.get("/human-shape-lab/samples/{sample_id}/keypoints")
-def human_shape_lab_get_keypoints(sample_id: str, force_auto: bool = False) -> dict:
+def human_shape_lab_get_keypoints(sample_id: str, force_auto: bool = False, pose_backend: str | None = None) -> dict:
     """Return current saved keypoints for a sample, or geometric estimate if none."""
     try:
         manifest = _load_human_shape_sample_manifest(sample_id)
@@ -2195,16 +4295,23 @@ def human_shape_lab_get_keypoints(sample_id: str, force_auto: bool = False) -> d
             "parts": BODY_PARTS_SEGMENTS,
         }
 
-    # Auto-estimate: try MediaPipe first, fall back to geometry
+    # Auto-estimate: choose backend without affecting the default pipeline.
     image_rel = manifest.get("image_path")
     auto_source = "geometric"
     kp = None
+    backend = str(pose_backend or os.getenv("HUMAN_SHAPE_POSE_BACKEND", "legacy")).strip().lower()
     if image_rel:
         image_path = _resolve_input_path(image_rel)
         if image_path.exists():
-            kp = _mediapipe_keypoints(image_path)
-            if kp:
-                auto_source = "mediapipe_pose"
+            if backend in ("landmarker", "tasks", "v2", "both"):
+                kp_v2, _meta_v2 = _mediapipe_landmarker_keypoints(image_path)
+                if kp_v2:
+                    kp = kp_v2
+                    auto_source = "mediapipe_pose_landmarker"
+            if kp is None and backend in ("legacy", "v1", "both", ""):
+                kp = _mediapipe_keypoints(image_path)
+                if kp:
+                    auto_source = "mediapipe_pose"
 
     if kp is None:
         kp = _geometric_keypoints()
@@ -2226,7 +4333,7 @@ def human_shape_lab_save_keypoints(sample_id: str, request: HumanShapeSaveKeypoi
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"Sample not found: {sample_id}")
 
-    manifest["keypoints"] = request.keypoints
+    manifest["keypoints"] = _normalize_keypoint_map(request.keypoints, force_visible=True)
     manifest["keypoints_source"] = "corrected"
     if request.accepted_parts is not None:
         manifest["accepted_parts"] = request.accepted_parts
@@ -2267,31 +4374,73 @@ def human_shape_lab_objective_snapshot(request: HumanShapeObjectiveSnapshotReque
 
 
 @app.get("/human-shape-lab/samples/{sample_id}/proposal")
-def human_shape_lab_sample_proposal(sample_id: str, use_objective_snapshot: bool = True) -> dict:
+def human_shape_lab_sample_proposal(
+    sample_id: str,
+    use_objective_snapshot: bool = True,
+    pose_backend: str | None = None,
+    apply_refiner: bool = True,
+) -> dict:
     try:
         manifest = _load_human_shape_sample_manifest(sample_id)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"Sample not found: {sample_id}")
 
-    base, base_source = _estimate_base_keypoints_for_manifest(manifest)
-    refiner = _load_keypoint_refiner_model()
-    proposal = _apply_refiner(base, refiner)
+    base, base_source, base_params = _estimate_base_keypoints_for_manifest(
+        manifest,
+        pose_backend_override=pose_backend,
+    )
+    if apply_refiner:
+        refiner = _load_keypoint_refiner_model()
+        proposal, proposal_meta = _predict_keypoints_from_base(base, refiner)
+        proposal_source = "base_plus_refiner"
+    else:
+        proposal = _normalize_keypoint_map(base, force_visible=True)
+        proposal_meta = {
+            "refiner": {
+                "applied": False,
+                "reason": "disabled_by_request",
+            }
+        }
+        proposal_source = "base_only"
+    proposal = _normalize_keypoint_map(proposal, force_visible=True)
 
     objectives, objective_source = _load_objective_samples(use_snapshot=use_objective_snapshot)
-    target_map = {str(item.get("sample_id")): item.get("keypoints") or {} for item in objectives}
+    target_map = {str(item.get("sample_id")): _normalize_keypoint_map(item.get("keypoints") or {}, force_visible=True) for item in objectives}
     target = target_map.get(sample_id)
+    target_source = objective_source if target else None
+    if not target:
+        manifest_kp = manifest.get("keypoints")
+        if isinstance(manifest_kp, dict) and manifest_kp:
+            target = _normalize_keypoint_map(manifest_kp, force_visible=True)
+            target_source = "sample_manifest"
     metrics = _evaluate_keypoints_against_target(proposal, target) if target else None
+
+    control_parts = [str(p.get("id")) for p in BODY_PARTS_SEGMENTS]
+    proposal_parts = [p for p in BODY_PARTS_SEGMENTS if proposal.get(p["kp_a"]) and proposal.get(p["kp_b"])]
+    target_parts = [p for p in BODY_PARTS_SEGMENTS if (target or {}).get(p["kp_a"]) and (target or {}).get(p["kp_b"])]
+    proposal_part_ids = [str(p["id"]) for p in proposal_parts]
+    target_part_ids = [str(p["id"]) for p in target_parts]
 
     return {
         "status": "ok",
         "sample_id": sample_id,
         "base_source": base_source,
-        "proposal_source": "base_plus_refiner",
+        "base_params": base_params,
+        "proposal_source": proposal_source,
+        "proposal_meta": proposal_meta,
         "proposal_keypoints": proposal,
-        "target_source": objective_source if target else None,
+        "target_source": target_source,
         "target_keypoints": target,
         "metrics": metrics,
         "parts": BODY_PARTS_SEGMENTS,
+        "parity": {
+            "control_parts_total": len(control_parts),
+            "proposal_parts_total": len(proposal_part_ids),
+            "target_parts_total": len(target_part_ids),
+            "missing_in_proposal": [p for p in control_parts if p not in proposal_part_ids],
+            "missing_in_target": [p for p in control_parts if p not in target_part_ids],
+            "matches_control_schema": len(proposal_part_ids) == len(control_parts),
+        },
     }
 
 
@@ -2303,6 +4452,16 @@ def human_shape_lab_keypoints_iterate(request: HumanShapeIterativeTrainRequest) 
             learning_rate=request.learning_rate,
             reset_model=request.reset_model,
             use_objective_snapshot=request.use_objective_snapshot,
+            update_only_erroneous_sections=request.update_only_erroneous_sections,
+            section_error_threshold=request.section_error_threshold,
+            enable_golden_ratio_prior=request.enable_golden_ratio_prior,
+            golden_ratio_alpha=request.golden_ratio_alpha,
+            enable_arm_pose_prior=request.enable_arm_pose_prior,
+            arm_pose_alpha=request.arm_pose_alpha,
+            enable_leg_pose_prior=request.enable_leg_pose_prior,
+            leg_pose_alpha=request.leg_pose_alpha,
+            enable_arm_pose_curriculum=request.enable_arm_pose_curriculum,
+            curriculum_start_fraction=request.curriculum_start_fraction,
         )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -2310,6 +4469,22 @@ def human_shape_lab_keypoints_iterate(request: HumanShapeIterativeTrainRequest) 
     return {
         **result,
         "lab": _human_shape_lab_status()["lab"],
+    }
+
+
+@app.post("/human-shape-lab/model/save")
+def human_shape_lab_model_save(request: HumanShapeSaveModelRequest) -> dict:
+    try:
+        meta = _save_human_shape_model_checkpoint(
+            name=request.name,
+            include_objective_snapshot=request.include_objective_snapshot,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {
+        "status": "ok",
+        "checkpoint": meta,
     }
 
 

@@ -31,6 +31,19 @@ Flujo principal:
 - Fase 2.2 try-on v2: fase2_2/core/tryon/*
 - UI: apps/api/ui/index.html y apps/api/ui/tryon.html
 
+### Stack oficial de IA para pose (Human Shape Lab)
+
+El sistema de identificacion de pose en Human Shape Lab usa dos modelos complementarios:
+
+1. Modelo oficial de deteccion de pose: Google Pose Landmarker (MediaPipe Tasks).
+2. Modelo propio del proyecto: refinador entrenable de keypoints (keypoint_refiner_v1).
+
+Politica de uso:
+
+- Google Pose Landmarker se usa para obtener la pose base cuando el backend seleccionado es `landmarker` (o `both`).
+- El modelo propio refina esa base cuando `apply_refiner=true`.
+- El backend `legacy` se mantiene por compatibilidad y fallback.
+
 ## Nueva Linea: Fase 2.3 (SAM 3D Body)
 
 Objetivo inmediato de mejora del try-on:
@@ -132,6 +145,30 @@ Base URL local: http://localhost:8000
 | DELETE | /looks/{look_id} | Elimina look |
 | GET | /fotos-personas | Lista fotos disponibles de fotos_personas |
 | POST | /tryon/apply | Aplica look sobre foto usando pipeline_v2 |
+
+### Human Shape Lab (Pose IA)
+
+| Metodo | Endpoint | Descripcion |
+|---|---|---|
+| GET | /human-shape-lab | UI de anotacion/revision de keypoints |
+| GET | /human-shape-lab/status | Estado del laboratorio (muestras, snapshot, refiner) |
+| GET | /human-shape-lab/parts | Esquema de keypoints y partes corporales |
+| GET | /human-shape-lab/samples/{sample_id}/keypoints | Retorna keypoints guardados o auto-estimados |
+| GET | /human-shape-lab/samples/{sample_id}/proposal | Compara propuesta IA vs objetivo guardado |
+| POST | /human-shape-lab/samples/{sample_id}/keypoints | Guarda correccion manual de keypoints |
+| POST | /human-shape-lab/objective/snapshot | Guarda snapshot objetivo para entrenamiento iterativo |
+| POST | /human-shape-lab/keypoints/iterate | Entrenamiento iterativo del refinador de keypoints |
+| POST | /human-shape-lab/model/save | Guarda checkpoint del refinador |
+
+Parametros clave de seleccion de modelo en endpoints GET:
+
+- `pose_backend=legacy|landmarker|both`
+- `apply_refiner=true|false` (solo en `/human-shape-lab/samples/{sample_id}/proposal`)
+
+Recomendacion operativa:
+
+- Para ver salida pura de Google Pose Landmarker: `pose_backend=landmarker&apply_refiner=false`.
+- Para salida final del sistema (Google + modelo propio): `pose_backend=landmarker&apply_refiner=true`.
 
 ## Contratos Principales de Request
 
