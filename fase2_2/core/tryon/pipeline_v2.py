@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import shutil
 from pathlib import Path
 
@@ -79,6 +80,7 @@ def _render_layered_overlay_with_offset(
     scale: float,
     offset_x: float,
     offset_y: float,
+    rotation_deg: float,
     segmentation_mask_path: str | None,
 ) -> dict:
     background = np.array(Image.open(image_path).convert("RGB"))
@@ -91,12 +93,14 @@ def _render_layered_overlay_with_offset(
     target_w = int(max(48, min(bg_w * 0.8, bg_w * 0.45 * max(0.5, min(scale, 2.0)))))
     target_h = int(max(48, target_w * aspect))
 
-    resized = np.array(
-        Image.fromarray(garment_rgba, mode="RGBA").resize((target_w, target_h), resample=Image.BILINEAR),
-        dtype=np.uint8,
-    )
+    resized_img = Image.fromarray(garment_rgba, mode="RGBA").resize((target_w, target_h), resample=Image.BILINEAR)
+    if abs(rotation_deg) > 0.1:
+        # Rotacion sobre centro para seguir inclinacion corporal.
+        resized_img = resized_img.rotate(-float(rotation_deg), resample=Image.BILINEAR, expand=True)
+    resized = np.array(resized_img, dtype=np.uint8)
+    actual_h, actual_w = resized.shape[:2]
 
-    base_x = int((bg_w - target_w) / 2)
+    base_x = int((bg_w - actual_w) / 2)
     base_y = int(bg_h * 0.2)
 
     x = int(base_x + (offset_x * bg_w))
@@ -123,10 +127,78 @@ def _render_layered_overlay_with_offset(
         "mode": "layered_overlay_v2",
         "overlay_position": {"x": x, "y": y},
         "overlay_base_position": {"x": base_x, "y": base_y},
-        "overlay_size": {"w": target_w, "h": target_h},
+        "overlay_size": {"w": actual_w, "h": actual_h},
         "offset_applied": {"x": offset_x, "y": offset_y},
+        "rotation_deg": float(rotation_deg),
         "occlusion_enabled": occlusion_mask is not None,
     }
+
+
+def _landmark_xy(landmarks, idx: int) -> tuple[float, float]:
+    lm = landmarks.landmark[idx]
+    return float(lm.x), float(lm.y)
+
+
+def _compute_pose_guides(landmarks) -> dict:
+    # Indices MediaPipe Pose: hombros 11/12, caderas 23/24.
+    ls = _landmark_xy(landmarks, 11)
+    rs = _landmark_xy(landmarks, 12)
+    lh = _landmark_xy(landmarks, 23)
+    rh = _landmark_xy(landmarks, 24)
+
+    shoulder_dx = rs[0] - ls[0]
+    shoulder_dy = rs[1] - ls[1]
+    shoulder_width = float(math.hypot(shoulder_dx, shoulder_dy))
+    shoulder_angle_deg = float(math.degrees(math.atan2(shoulder_dy, shoulder_dx)))
+
+    hip_width = float(math.hypot(rh[0] - lh[0], rh[1] - lh[1]))
+    shoulder_mid = ((ls[0] + rs[0]) * 0.5, (ls[1] + rs[1]) * 0.5)
+    hip_mid = ((lh[0] + rh[0]) * 0.5, (lh[1] + rh[1]) * 0.5)
+    torso_height = float(max(1e-4, abs(hip_mid[1] - shoulder_mid[1])))
+
+    return {
+        "shoulder_width_norm": shoulder_width,
+        "hip_width_norm": hip_width,
+        "torso_height_norm": torso_height,
+        "shoulder_angle_deg": shoulder_angle_deg,
+    }
+
+
+def _apply_pose_guides(
+    pred_transform: dict,
+    pose_guides: dict,
+    enabled: bool,
+    strength: float,
+) -> dict:
+    adjusted = dict(pred_transform)
+    if not enabled:
+        adjusted["rotation_deg"] = 0.0
+        return adjusted
+
+    s = float(max(0.0, min(1.0, strength)))
+    shoulder_angle = float(pose_guides.get("shoulder_angle_deg", 0.0))
+    shoulder_width = float(pose_guides.get("shoulder_width_norm", 0.22))
+    hip_width = float(pose_guides.get("hip_width_norm", 0.20))
+
+    # Mezcla entre prediccion y tamano sugerido por anchura hombros/cadera.
+    scale_hint = 0.5 * (shoulder_width / 0.22) + 0.5 * (hip_width / 0.20)
+    scale_hint = float(max(0.75, min(1.35, scale_hint)))
+
+    base_scale = float(pred_transform.get("scale", 1.0))
+    guided_scale = base_scale * scale_hint
+    adjusted["scale"] = float(max(0.5, min(2.5, (1.0 - s) * base_scale + s * guided_scale)))
+
+    # Rotacion limitada para evitar artefactos en poses extremas.
+    adjusted["rotation_deg"] = float(max(-30.0, min(30.0, shoulder_angle * (0.6 + 0.4 * s))))
+    return adjusted
+
+
+def _detect_pose_with_backend(image_path: str, backend: str):
+    try:
+        return detect_pose(image_path, backend=backend)
+    except TypeError:
+        # Compatibilidad con tests/mocks antiguos que aceptan solo image_path.
+        return detect_pose(image_path)
 
 
 def run_tryon_v2(
@@ -140,18 +212,26 @@ def run_tryon_v2(
     - Segmentacion via `segment_person_v2` con config opcional de modelo.
     - Transformacion de prenda usando modelo multisalida (scale + offset_x + offset_y).
     """
-    landmarks = detect_pose(request.image_path)
+    landmarks = _detect_pose_with_backend(request.image_path, request.pose_backend)
     if landmarks is None:
         raise ValueError("No se detectaron landmarks de pose")
 
     heuristic_scale = compute_scale(landmarks, garment_type=request.garment_type)
     landmarks_contract = build_landmarks_contract(landmarks)
+    pose_guides = _compute_pose_guides(landmarks)
 
     pred_transform, transform_source = _predict_transform_or_default(
         landmarks_contract=landmarks_contract,
         garment_type=request.garment_type,
         offset_model_path=offset_model_path,
         fallback_scale=heuristic_scale,
+    )
+
+    pred_transform = _apply_pose_guides(
+        pred_transform=pred_transform,
+        pose_guides=pose_guides,
+        enabled=bool(request.apply_pose_guides),
+        strength=float(request.pose_guide_strength),
     )
 
     transform_contract = build_transform_contract(
@@ -164,6 +244,7 @@ def run_tryon_v2(
     }
     transform_contract["offset_x"] = pred_transform["offset_x"]
     transform_contract["offset_y"] = pred_transform["offset_y"]
+    transform_contract["rotation_deg"] = pred_transform.get("rotation_deg", 0.0)
 
     mask_output_path = str(Path(request.output_path).with_suffix(".person_mask.png"))
     seg = segment_person_v2(
@@ -190,6 +271,7 @@ def run_tryon_v2(
                 scale=pred_transform["scale"],
                 offset_x=pred_transform["offset_x"],
                 offset_y=pred_transform["offset_y"],
+                rotation_deg=pred_transform.get("rotation_deg", 0.0),
                 segmentation_mask_path=seg.mask_path,
             )
             baseline = False
@@ -217,6 +299,10 @@ def run_tryon_v2(
             "landmarks_contract": landmarks_contract,
             "transform_contract": transform_contract,
             "transform_source": transform_source,
+            "pose_backend": request.pose_backend,
+            "pose_guides_enabled": bool(request.apply_pose_guides),
+            "pose_guide_strength": float(request.pose_guide_strength),
+            "pose_guides": pose_guides,
             "segmentation_backend": seg.backend,
             "segmentation_note": seg.note,
             "segmentation_mask_path": seg.mask_path,

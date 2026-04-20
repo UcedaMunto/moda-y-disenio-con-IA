@@ -10,6 +10,21 @@ class TryOnRequest(BaseModel):
         pattern="^(shirt|skirt|pants|dress|other)$",
         description="Categoria de prenda para ajuste por tipo",
     )
+    pose_backend: str = Field(
+        default="landmarker",
+        pattern="^(legacy|landmarker|both)$",
+        description="Backend de pose: legacy, landmarker o both (fallback)",
+    )
+    apply_pose_guides: bool = Field(
+        default=False,
+        description="Si aplica guias de pose para ajustar escala/angulo de la prenda",
+    )
+    pose_guide_strength: float = Field(
+        default=0.60,
+        ge=0.0,
+        le=1.0,
+        description="Fuerza de mezcla de guias de pose sobre transformacion base",
+    )
 
 
 class TryOnResult(BaseModel):

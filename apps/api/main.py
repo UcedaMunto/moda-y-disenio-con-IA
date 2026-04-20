@@ -1402,6 +1402,9 @@ class TryOnApplyRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
     look_id: str
     foto_nombre: str
+    pose_backend: str = Field(default="landmarker", pattern="^(legacy|landmarker|both)$")
+    apply_pose_guides: bool = True
+    pose_guide_strength: float = Field(default=0.60, ge=0.0, le=1.0)
 
 
 class HumanShapeBootstrapRequest(BaseModel):
@@ -4524,6 +4527,9 @@ def tryon_apply(request: TryOnApplyRequest) -> dict:
             image_path=str(foto_path),
             garment_path=str(garment_full),
             output_path=output_path,
+            pose_backend=request.pose_backend,
+            apply_pose_guides=request.apply_pose_guides,
+            pose_guide_strength=request.pose_guide_strength,
         )
         result = run_tryon_v2(tryon_req)
     except Exception as exc:

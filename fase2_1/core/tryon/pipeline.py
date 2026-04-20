@@ -75,7 +75,10 @@ def run_tryon(request: TryOnRequest) -> TryOnResult:
     Si `garment_path` es imagen raster, aplica composicion por capas.
     Si no, conserva fallback placeholder para mantener compatibilidad.
     """
-    landmarks = detect_pose(request.image_path)
+    try:
+        landmarks = detect_pose(request.image_path, backend=request.pose_backend)
+    except TypeError:
+        landmarks = detect_pose(request.image_path)
     if landmarks is None:
         raise ValueError("No se detectaron landmarks de pose")
 
