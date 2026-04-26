@@ -1,13 +1,15 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
-from fastapi import HTTPException
+from fastapi import File, HTTPException, UploadFile
 import base64
 import binascii
+import io
 import json
 import os
 import re
 import shutil
 import subprocess
+import tempfile
 import time
 import urllib.request
 from pathlib import Path
@@ -15,6 +17,21 @@ from pydantic import BaseModel, ConfigDict, Field
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from PIL import Image, UnidentifiedImageError
+try:
+    from pillow_heif import register_avif_opener, register_heif_opener
+    register_heif_opener()
+    register_avif_opener()
+except ImportError:
+    try:
+        from pillow_heif import register_heif_opener
+        register_heif_opener()
+    except ImportError:
+        pass
+try:
+    import pillow_avif  # type: ignore  # registers AVIF opener in PIL
+except ImportError:
+    pass
 
 from core.db.postgres import init_database
 from core.assets.importer import import_assets_from_directory
@@ -36,6 +53,12 @@ from fase2_1.core.tryon.schemas import (
     TryOnManualEvalRequest as Fase21TryOnManualEvalRequest,
     TryOnRequest as Fase21TryOnRequest,
 )
+from fase2_2.core.tryon.parsing_adapter import segment_person_v2
+from fase2_2.core.tryon.pipeline_v2 import (
+    _render_clothing_removal_and_replacement,
+    _render_garment_detection_and_replacement,
+)
+from apps.api.local_tryon_quality import run_local_tryon_quality
 
 
 @asynccontextmanager
@@ -1405,6 +1428,10 @@ class TryOnApplyRequest(BaseModel):
     pose_backend: str = Field(default="landmarker", pattern="^(legacy|landmarker|both)$")
     apply_pose_guides: bool = True
     pose_guide_strength: float = Field(default=0.60, ge=0.0, le=1.0)
+    size_multiplier: float = Field(default=1.0, ge=0.6, le=1.8)
+    garment_in_front: bool = True
+    detect_and_replace_garment: bool = False
+    remove_clothing_and_apply_texture: bool = False
 
 
 class HumanShapeBootstrapRequest(BaseModel):
@@ -4520,6 +4547,18 @@ def tryon_apply(request: TryOnApplyRequest) -> dict:
     output_name = f"tryon_{request.look_id}_{foto_path.stem}_{int(time.time())}.png"
     output_path = str(output_dir / output_name)
 
+    guide_source = "none"
+    shape_guide_keypoints = None
+    try:
+        sample_id = _human_shape_sample_id(request.foto_nombre)
+        sample_manifest = _load_human_shape_sample_manifest(sample_id)
+        sample_kp = sample_manifest.get("keypoints")
+        if isinstance(sample_kp, dict) and sample_kp:
+            shape_guide_keypoints = sample_kp
+            guide_source = f"human_shape_lab:{sample_id}"
+    except Exception:
+        shape_guide_keypoints = None
+
     try:
         from fase2_2.core.tryon.pipeline_v2 import run_tryon_v2
         from fase2_1.core.tryon.schemas import TryOnRequest as _TryOnRequest
@@ -4530,6 +4569,11 @@ def tryon_apply(request: TryOnApplyRequest) -> dict:
             pose_backend=request.pose_backend,
             apply_pose_guides=request.apply_pose_guides,
             pose_guide_strength=request.pose_guide_strength,
+            size_multiplier=request.size_multiplier,
+            garment_in_front=request.garment_in_front,
+            shape_guide_keypoints=shape_guide_keypoints,
+            detect_and_replace_garment=request.detect_and_replace_garment,
+            remove_clothing_and_apply_texture=request.remove_clothing_and_apply_texture,
         )
         result = run_tryon_v2(tryon_req)
     except Exception as exc:
@@ -4555,8 +4599,225 @@ def tryon_apply(request: TryOnApplyRequest) -> dict:
         "look_id": request.look_id,
         "look_name": manifest.get("name"),
         "foto": request.foto_nombre,
+        "guide_source": guide_source,
         "output_path": result_output,
         "url": url,
+    }
+
+
+@app.post("/tryon/local-apply")
+async def tryon_local_apply(
+    person_image: UploadFile = File(...),
+    garment_image: UploadFile = File(...),
+    alpha: float = 0.55,
+    quality_mode: str = "quality",
+    max_seconds: int = 300,
+    force_quality: bool = True,
+) -> dict:
+    """Try-on local heuristico en CPU, con fallback explicito a blend."""
+    if alpha < 0.0 or alpha > 1.0:
+        raise HTTPException(status_code=400, detail="alpha debe estar entre 0.0 y 1.0")
+    if quality_mode not in {"quality", "balanced", "fast", "off"}:
+        raise HTTPException(status_code=400, detail="quality_mode invalido. Usa quality|balanced|fast|off")
+    if max_seconds < 10 or max_seconds > 1800:
+        raise HTTPException(status_code=400, detail="max_seconds debe estar entre 10 y 1800")
+
+    def _accept_image_content_type(content_type: str | None) -> bool:
+        if not content_type:
+            return True
+        ct = content_type.lower().strip()
+        if ct.startswith("image/"):
+            return True
+        # Some clients send AVIF/HEIC as octet-stream; let decoder decide.
+        return ct in {"application/octet-stream", "binary/octet-stream"}
+
+    if not _accept_image_content_type(person_image.content_type):
+        raise HTTPException(status_code=400, detail=f"person_image debe ser imagen (content_type={person_image.content_type})")
+    if not _accept_image_content_type(garment_image.content_type):
+        raise HTTPException(status_code=400, detail=f"garment_image debe ser imagen (content_type={garment_image.content_type})")
+
+    person_bytes = await person_image.read()
+    garment_bytes = await garment_image.read()
+    if not person_bytes or not garment_bytes:
+        raise HTTPException(status_code=400, detail="Archivos vacios no permitidos")
+
+    def _decode_image(raw: bytes, label: str) -> "Image.Image":
+        """Decode image bytes using multiple decoders for broader format support."""
+        decode_errors: list[str] = []
+
+        # PIL attempt (jpeg/png/webp/gif/tiff/bmp + plugins)
+        try:
+            img = Image.open(io.BytesIO(raw))
+            img.load()  # force full decode
+            return img.convert("RGBA")
+        except Exception as pil_exc:
+            decode_errors.append(f"PIL: {pil_exc}")
+
+        # pillow-heif direct bytes decode (HEIC/AVIF)
+        try:
+            from pillow_heif import read_heif  # type: ignore
+            heif_file = read_heif(raw)
+            img = Image.frombytes(
+                heif_file.mode,
+                heif_file.size,
+                heif_file.data,
+                "raw",
+            )
+            return img.convert("RGBA")
+        except Exception as heif_exc:
+            decode_errors.append(f"HEIF: {heif_exc}")
+
+        # OpenCV fallback
+        try:
+            import cv2  # type: ignore
+            import numpy as np
+            arr = np.frombuffer(raw, dtype=np.uint8)
+            decoded = cv2.imdecode(arr, cv2.IMREAD_UNCHANGED)
+            if decoded is None:
+                raise ValueError("cv2.imdecode returned None")
+            if decoded.ndim == 2:
+                rgba = cv2.cvtColor(decoded, cv2.COLOR_GRAY2RGBA)
+            elif decoded.ndim == 3 and decoded.shape[2] == 3:
+                rgba = cv2.cvtColor(decoded, cv2.COLOR_BGR2RGBA)
+            elif decoded.ndim == 3 and decoded.shape[2] == 4:
+                rgba = cv2.cvtColor(decoded, cv2.COLOR_BGRA2RGBA)
+            else:
+                raise ValueError(f"shape inesperada: {getattr(decoded, 'shape', None)}")
+            return Image.fromarray(rgba, "RGBA")
+        except Exception as cv_exc:
+            decode_errors.append(f"OpenCV: {cv_exc}")
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"No se pudo decodificar {label}. "
+                    "Formatos soportados: JPEG, PNG, WebP, BMP, TIFF, GIF, HEIC, AVIF. "
+                    f"Detalle: {' | '.join(decode_errors)}"
+                ),
+            ) from cv_exc
+
+    person = _decode_image(person_bytes, "person_image")
+    garment = _decode_image(garment_bytes, "garment_image")
+
+    output_dir = DATA_DIR / "tryon_results" / "local"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    request_id = str(int(time.time() * 1000))
+    output_name = f"local_tryon_{request_id}.png"
+    output_path = output_dir / output_name
+
+    render_meta: dict = {
+        "mode": "blend_fallback",
+        "status": "fallback",
+        "reason": "segmentation_not_attempted",
+    }
+    backend = "local_cpu_blend_fallback"
+    quality_seconds = {
+        "quality": max_seconds,
+        "balanced": min(max_seconds, 180),
+        "fast": min(max_seconds, 60),
+        "off": 0,
+    }[quality_mode]
+
+    with tempfile.TemporaryDirectory(prefix="local_tryon_", dir=str(output_dir)) as tmp_dir_raw:
+        tmp_dir = Path(tmp_dir_raw)
+        person_input_path = tmp_dir / "person.png"
+        garment_input_path = tmp_dir / "garment.png"
+        seg_mask_path = tmp_dir / "person_mask.png"
+
+        person_input_path.write_bytes(person_bytes)
+        garment_input_path.write_bytes(garment_bytes)
+
+        try:
+            seg = segment_person_v2(
+                image_path=str(person_input_path),
+                output_mask_path=str(seg_mask_path),
+            )
+
+            if quality_mode != "off" and seg.mask_path:
+                quality_result = run_local_tryon_quality(
+                    person_image_path=str(person_input_path),
+                    garment_image_path=str(garment_input_path),
+                    segmentation_mask_path=str(seg.mask_path),
+                    output_path=str(output_path),
+                    max_seconds=quality_seconds,
+                    force_quality=force_quality,
+                )
+                render_meta = {
+                    "mode": quality_result.mode,
+                    "status": quality_result.status,
+                    "reason": quality_result.reason,
+                    "score": quality_result.score,
+                    "iterations": quality_result.iterations,
+                    "elapsed_seconds": round(quality_result.elapsed_seconds, 3),
+                    "quality_mode": quality_mode,
+                    "max_seconds": quality_seconds,
+                    "force_quality": force_quality,
+                }
+                if quality_result.ok:
+                    backend = "local_cpu_quality"
+
+            if backend != "local_cpu_quality":
+                render_meta = _render_garment_detection_and_replacement(
+                    image_path=str(person_input_path),
+                    garment_path=str(garment_input_path),
+                    output_path=str(output_path),
+                    segmentation_mask_path=seg.mask_path,
+                    scale=1.0,
+                )
+
+                if render_meta.get("status") != "ok":
+                    render_meta = _render_clothing_removal_and_replacement(
+                        image_path=str(person_input_path),
+                        garment_path=str(garment_input_path),
+                        output_path=str(output_path),
+                        segmentation_mask_path=seg.mask_path,
+                        scale=1.0,
+                    )
+
+                if render_meta.get("status") == "ok":
+                    backend = "local_cpu_segmented"
+                else:
+                    garment_resized = garment.resize(person.size, Image.Resampling.LANCZOS)
+                    blended = Image.blend(person, garment_resized, alpha).convert("RGB")
+                    blended.save(output_path, format="PNG")
+                    render_meta = {
+                        "mode": "blend_fallback",
+                        "status": "fallback",
+                        "reason": render_meta.get("reason", "segmentation_fallback"),
+                        "quality_mode": quality_mode,
+                        "max_seconds": quality_seconds,
+                    }
+        except Exception as exc:
+            garment_resized = garment.resize(person.size, Image.Resampling.LANCZOS)
+            blended = Image.blend(person, garment_resized, alpha).convert("RGB")
+            blended.save(output_path, format="PNG")
+            render_meta = {
+                "mode": "blend_fallback",
+                "status": "fallback",
+                "reason": f"segmentation_error: {exc}",
+                "quality_mode": quality_mode,
+                "max_seconds": quality_seconds,
+            }
+
+    png_bytes = output_path.read_bytes()
+
+    image_base64 = base64.b64encode(png_bytes).decode("ascii")
+    rel = output_path.relative_to(DATA_DIR)
+
+    return {
+        "status": "ok",
+        "backend": backend,
+        "mime_type": "image/png",
+        "alpha": alpha,
+        "quality_mode": quality_mode,
+        "max_seconds": quality_seconds,
+        "force_quality": force_quality,
+        "render_mode": render_meta.get("mode"),
+        "render_status": render_meta.get("status"),
+        "render_reason": render_meta.get("reason"),
+        "render_meta": render_meta,
+        "output_path": str(output_path),
+        "url": f"/artifacts/{rel.as_posix()}",
+        "image_base64": image_base64,
     }
 
 
@@ -4567,6 +4828,11 @@ def tryon_apply(request: TryOnApplyRequest) -> dict:
 @app.get("/tryon")
 def tryon_page() -> FileResponse:
     return FileResponse(str(UI_DIR / "tryon.html"))
+
+
+@app.get("/tryon/local")
+def tryon_local_page() -> FileResponse:
+    return FileResponse(str(UI_DIR / "local_tryon.html"))
 
 
 @app.get("/human-shape-lab")

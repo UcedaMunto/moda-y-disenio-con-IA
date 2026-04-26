@@ -153,6 +153,30 @@
       background: var(--surface);
     }
 
+    .control-group {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 6px 10px;
+      background: var(--surface);
+      color: var(--ink2);
+      font-size: 0.78rem;
+    }
+
+    .control-group input[type="range"] {
+      width: 130px;
+      accent-color: var(--accent);
+    }
+
+    .control-value {
+      min-width: 44px;
+      color: var(--ink);
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+
     .sam3d-result {
       width: 100%;
       max-width: 700px;
@@ -275,7 +299,20 @@
       <div class="apply-bar">
         <div id="status-bar">Selecciona un look y una foto para aplicar la prueba virtual.</div>
         <button class="btn btn-accent" id="btnApply" disabled>▶ Aplicar prueba virtual</button>
-        <label class="toggle"><input type="checkbox" id="sam3dMockToggle" /> Mock 3D</label>
+        <label class="control-group">
+          Tamaño
+          <input type="range" id="sizeMultiplier" min="0.6" max="1.8" step="0.05" value="1.0" />
+          <span class="control-value" id="sizeMultiplierValue">1.00x</span>
+        </label>
+        <label class="control-group">
+          Guía pose
+          <input type="range" id="poseGuideStrength" min="0" max="1" step="0.05" value="0.60" />
+          <span class="control-value" id="poseGuideStrengthValue">0.60</span>
+        </label>
+        <label class="toggle"><input type="checkbox" id="garmentFrontToggle" checked /> Prenda al frente</label>
+        <label class="toggle"><input type="checkbox" id="detectGarmentToggle" /> Detectar y reemplazar prenda</label>
+        <label class="toggle"><input type="checkbox" id="removeClothingToggle" /> ✨ Remover ropa y aplicar textura</label>
+        <label class="toggle"><input type="checkbox" id="sam3dMockToggle" checked /> Mock 3D</label>
         <button class="btn" id="btnBuildBody3d" disabled>🧍 Generar maniqui 3D</button>
         <button class="btn" id="btnSam3dPreflight">🔎 Preflight 3D</button>
       </div>
@@ -460,6 +497,38 @@
       return String(str || "").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
     }
 
+    function bindTryonControls() {
+      const sizeInput = document.getElementById("sizeMultiplier");
+      const sizeValue = document.getElementById("sizeMultiplierValue");
+      const guideInput = document.getElementById("poseGuideStrength");
+      const guideValue = document.getElementById("poseGuideStrengthValue");
+
+      const sync = () => {
+        sizeValue.textContent = `${Number(sizeInput.value).toFixed(2)}x`;
+        guideValue.textContent = Number(guideInput.value).toFixed(2);
+      };
+
+      sizeInput.addEventListener("input", sync);
+      guideInput.addEventListener("input", sync);
+      sync();
+    }
+
+    async function ensureSam3dMode() {
+      const mockToggle = document.getElementById("sam3dMockToggle");
+      try {
+        const data = await api("/fase2_3/body/preflight");
+        const caps = data.capabilities || {};
+        const realReady = Boolean(caps.real_ready);
+        if (!realReady) {
+          mockToggle.checked = true;
+          setStatus("SAM3D real no disponible: se usara Mock 3D.", "var(--warn)");
+        }
+      } catch {
+        // Si preflight falla, mantenemos mock activado para evitar errores duros.
+        mockToggle.checked = true;
+      }
+    }
+
     document.getElementById("btnApply").addEventListener("click", async () => {
       if (!state.selectedLookId || !state.selectedFoto) return;
       const spinner = document.getElementById("spinner");
@@ -471,14 +540,27 @@
       document.getElementById("btnApply").disabled = true;
 
       try {
+        const sizeMultiplier = Number(document.getElementById("sizeMultiplier").value || 1);
+        const poseGuideStrength = Number(document.getElementById("poseGuideStrength").value || 0.6);
+        const garmentInFront = document.getElementById("garmentFrontToggle").checked;
+        const detectGarment = document.getElementById("detectGarmentToggle").checked;
+        const removeClothing = document.getElementById("removeClothingToggle").checked;
         const data = await api("/tryon/apply", "POST", {
           look_id: state.selectedLookId,
           foto_nombre: state.selectedFoto,
+          pose_backend: "landmarker",
+          apply_pose_guides: true,
+          pose_guide_strength: poseGuideStrength,
+          size_multiplier: sizeMultiplier,
+          garment_in_front: garmentInFront,
+          detect_and_replace_garment: detectGarment,
+          remove_clothing_and_apply_texture: removeClothing,
         });
         spinner.classList.remove("visible");
         if (data.url) {
           showResultImage(`${data.url}?t=${Date.now()}`);
-          setStatus(`✓ Prueba aplicada sobre "${data.foto}" con look "${data.look_name}"`, "var(--ok)");
+          const modeStr = removeClothing ? "remover_ropa" : (detectGarment ? "detección" : "overlay");
+          setStatus(`✓ Prueba aplicada (${sizeMultiplier.toFixed(2)}x, modo=${modeStr})`, "var(--ok)");
         } else {
           hint.style.display = "";
           hint.textContent = `✓ Procesado (estado: ${data.status}). Ruta: ${data.output_path}`;
@@ -519,7 +601,18 @@
         const color = hasError ? "var(--err)" : (hasWarnings ? "var(--warn)" : "var(--ok)");
         setStatus(text, color);
       } catch (e) {
-        setStatus(`✗ Preflight error: ${e.message}`, "var(--err)");
+        const msg = String(e && e.message ? e.message : e);
+        if (msg.toLowerCase().includes("not found") || msg.includes("404")) {
+          setSam3dResult([
+            "<strong>Preflight no disponible en este puerto</strong>",
+            "El endpoint /fase2_3/body/preflight no existe en esta instancia.",
+            "Puedes continuar con Mock 3D activado o abrir la app en el puerto 8010.",
+          ].join("<br/>"));
+          setStatus("Preflight no disponible en este puerto; usando modo mock.", "var(--warn)");
+          document.getElementById("sam3dMockToggle").checked = true;
+          return;
+        }
+        setStatus(`✗ Preflight error: ${msg}`, "var(--err)");
       }
     });
 
@@ -542,7 +635,22 @@
           use_mock: useMock,
           export_glb: true,
         };
-        const data = await api("/fase2_3/body/reconstruct", "POST", payload);
+        let data = null;
+        try {
+          data = await api("/fase2_3/body/reconstruct", "POST", payload);
+        } catch (err) {
+          const msg = String(err && err.message ? err.message : err);
+          const missingCheckpoint = msg.toLowerCase().includes("checkpoint_path");
+          const missingMhr = msg.toLowerCase().includes("mhr_path");
+          if (!useMock && (missingCheckpoint || missingMhr)) {
+            const retryPayload = { ...payload, use_mock: true };
+            data = await api("/fase2_3/body/reconstruct", "POST", retryPayload);
+            document.getElementById("sam3dMockToggle").checked = true;
+            setStatus("SAM3D real no disponible; se aplico fallback automatico a Mock 3D.", "var(--warn)");
+          } else {
+            throw err;
+          }
+        }
 
         const previewUrl = data.preview_url || repoPathToArtifactUrl(data.preview_path);
         const glbPath = data.avatar_glb_path || (Array.isArray(data.glb_paths) && data.glb_paths.length ? data.glb_paths[0] : null);
@@ -574,6 +682,8 @@
     });
 
     // Init
+    bindTryonControls();
+    await ensureSam3dMode();
     await Promise.all([loadLooks(), loadFotos()]);
   </script>
 </body>

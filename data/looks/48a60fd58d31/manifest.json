@@ -1,0 +1,10 @@
+{
+  "look_id": "48a60fd58d31",
+  "name": "terre",
+  "model_path": "data/raw/models/TShirts.obj",
+  "texture_path": "data/processed/case-images/textures/candidate_01.png",
+  "garment_type": "other",
+  "project_id": "case-images",
+  "notes": "erre",
+  "created_at": 1776650297
+}

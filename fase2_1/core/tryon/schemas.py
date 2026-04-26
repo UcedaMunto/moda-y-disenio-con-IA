@@ -25,6 +25,28 @@ class TryOnRequest(BaseModel):
         le=1.0,
         description="Fuerza de mezcla de guias de pose sobre transformacion base",
     )
+    size_multiplier: float = Field(
+        default=1.0,
+        ge=0.6,
+        le=1.8,
+        description="Escala manual adicional para aumentar/reducir tamanio final",
+    )
+    garment_in_front: bool = Field(
+        default=False,
+        description="Si true, dibuja prenda al frente y desactiva oclusion por mascara",
+    )
+    shape_guide_keypoints: dict[str, dict] | None = Field(
+        default=None,
+        description="Keypoints de Human Shape Lab para guiar escala/posicion de superposicion",
+    )
+    detect_and_replace_garment: bool = Field(
+        default=False,
+        description="Si true, detecta la prenda actual en la imagen y la reemplaza con la textura",
+    )
+    remove_clothing_and_apply_texture: bool = Field(
+        default=False,
+        description="NUEVO: Si true, detecta TODA la ropa, la hace transparente y aplica textura de tela seleccionada",
+    )
 
 
 class TryOnResult(BaseModel):

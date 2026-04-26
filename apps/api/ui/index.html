@@ -336,6 +336,7 @@
           <button class="btn btn-accent" id="btnSaveLook">💾 Guardar modelo para prueba virtual</button>
           <div id="saveLookStatus" style="font-size:0.75rem;color:var(--ink2);margin-top:4px;"></div>
           <a id="tryonLink" href="/tryon" target="_blank" style="display:block;margin-top:6px;font-size:0.78rem;text-align:center;color:var(--accent);text-decoration:underline;">→ Ir a Prueba Virtual</a>
+          <a id="tryonLocalLink" href="/tryon/local" target="_blank" style="display:block;margin-top:6px;font-size:0.78rem;text-align:center;color:var(--accent);text-decoration:underline;">→ Ir a TryOn Local (sin cloud)</a>
         </div>
       </aside>
 
@@ -1590,6 +1591,9 @@
 
     if (byId("tryonLink")) {
       byId("tryonLink").href = looksApiPath("/tryon");
+    }
+    if (byId("tryonLocalLink")) {
+      byId("tryonLocalLink").href = looksApiPath("/tryon/local");
     }
 
     setStatus("Cargando catálogo…");

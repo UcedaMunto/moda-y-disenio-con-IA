@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TryOn Local - Fabric2Mesh</title>
+  <style>
+    :root {
+      --bg: #0f1418;
+      --surface: #1a2229;
+      --border: #2a3640;
+      --ink: #e6edf3;
+      --ink2: #9eb0bf;
+      --accent: #4ed3c5;
+      --ok: #5fd39f;
+      --bad: #ff7b7b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, "Segoe UI", sans-serif;
+      background: radial-gradient(circle at 20% 0%, #172029 0%, var(--bg) 55%);
+      color: var(--ink);
+      min-height: 100vh;
+    }
+    .wrap {
+      max-width: 1050px;
+      margin: 28px auto;
+      padding: 0 16px;
+    }
+    .head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .head h1 { margin: 0; font-size: 1.35rem; }
+    .head .links a {
+      color: var(--accent);
+      text-decoration: none;
+      margin-left: 12px;
+      font-size: 0.95rem;
+    }
+    .card {
+      background: rgba(26,34,41,0.92);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 14px;
+      margin-bottom: 14px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+    }
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .field label {
+      font-size: 0.82rem;
+      color: var(--ink2);
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+    .field input[type="file"],
+    .field input[type="range"] {
+      width: 100%;
+      background: #0f151a;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--ink);
+      padding: 8px;
+    }
+    .btn {
+      margin-top: 12px;
+      background: var(--accent);
+      color: #06231e;
+      border: none;
+      border-radius: 10px;
+      font-size: 0.96rem;
+      font-weight: 700;
+      padding: 10px 14px;
+      cursor: pointer;
+    }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    .status {
+      margin-top: 10px;
+      font-size: 0.9rem;
+      color: var(--ink2);
+      min-height: 22px;
+    }
+    .status.ok { color: var(--ok); }
+    .status.bad { color: var(--bad); }
+    .result {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 12px;
+    }
+    .pane {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+      background: #0d1318;
+    }
+    .pane h3 {
+      margin: 0;
+      font-size: 0.82rem;
+      color: var(--ink2);
+      padding: 8px;
+      border-bottom: 1px solid var(--border);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .pane img {
+      width: 100%;
+      aspect-ratio: 4/3;
+      object-fit: contain;
+      display: block;
+      background: #070b0e;
+    }
+    .meta {
+      margin-top: 8px;
+      font-size: 0.82rem;
+      color: var(--ink2);
+      word-break: break-word;
+    }
+    @media (max-width: 900px) {
+      .grid, .result { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="head">
+      <h1>TryOn Local (Integrado en API principal)</h1>
+      <div class="links">
+        <a href="/" target="_self">Editor</a>
+        <a href="/tryon" target="_self">TryOn actual</a>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="grid">
+        <div class="field">
+          <label>Imagen persona</label>
+          <input id="personImage" type="file" accept="image/*" />
+        </div>
+        <div class="field">
+          <label>Imagen prenda/textura</label>
+          <input id="garmentImage" type="file" accept="image/*" />
+        </div>
+      </div>
+
+      <div class="field" style="margin-top:12px;">
+        <label>Alpha de mezcla (<span id="alphaValue">0.55</span>)</label>
+        <input id="alphaRange" type="range" min="0" max="1" step="0.01" value="0.55" />
+      </div>
+
+      <div class="grid" style="margin-top:12px;">
+        <div class="field">
+          <label>Modo de calidad</label>
+          <select id="qualityMode" style="width:100%; background:#0f151a; border:1px solid var(--border); border-radius:8px; color:var(--ink); padding:8px;">
+            <option value="quality" selected>quality (busqueda profunda)</option>
+            <option value="balanced">balanced (intermedio)</option>
+            <option value="fast">fast (rapido)</option>
+            <option value="off">off (sin busqueda, fallback)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Tiempo maximo (segundos)</label>
+          <input id="maxSeconds" type="number" min="10" max="1800" step="10" value="300" />
+        </div>
+      </div>
+
+      <div class="field" style="margin-top:10px;">
+        <label style="display:flex; align-items:center; gap:8px; text-transform:none; letter-spacing:normal; font-weight:600; color:var(--ink);">
+          <input id="forceQuality" type="checkbox" checked />
+          Forzar calidad (evitar atajos y gastar presupuesto de busqueda)
+        </label>
+      </div>
+
+      <button id="runBtn" class="btn">Aplicar TryOn Local</button>
+      <div id="status" class="status"></div>
+      <div id="meta" class="meta"></div>
+    </div>
+
+    <div class="result">
+      <div class="pane">
+        <h3>Persona</h3>
+        <img id="personPreview" alt="Persona" />
+      </div>
+      <div class="pane">
+        <h3>Prenda</h3>
+        <img id="garmentPreview" alt="Prenda" />
+      </div>
+      <div class="pane">
+        <h3>Resultado</h3>
+        <img id="resultPreview" alt="Resultado" />
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const byId = (id) => document.getElementById(id);
+
+    const personInput = byId("personImage");
+    const garmentInput = byId("garmentImage");
+    const alphaRange = byId("alphaRange");
+    const alphaValue = byId("alphaValue");
+    const statusEl = byId("status");
+    const metaEl = byId("meta");
+    const runBtn = byId("runBtn");
+    const qualityMode = byId("qualityMode");
+    const maxSeconds = byId("maxSeconds");
+    const forceQuality = byId("forceQuality");
+
+    alphaRange.addEventListener("input", () => {
+      alphaValue.textContent = Number(alphaRange.value).toFixed(2);
+    });
+
+    function setStatus(msg, ok = null) {
+      statusEl.textContent = msg;
+      statusEl.classList.remove("ok", "bad");
+      if (ok === true) statusEl.classList.add("ok");
+      if (ok === false) statusEl.classList.add("bad");
+    }
+
+    function previewFile(input, imgId) {
+      const file = input.files?.[0];
+      if (!file) {
+        byId(imgId).removeAttribute("src");
+        return;
+      }
+      const r = new FileReader();
+      r.onload = () => {
+        byId(imgId).src = r.result;
+      };
+      r.readAsDataURL(file);
+    }
+
+    personInput.addEventListener("change", () => previewFile(personInput, "personPreview"));
+    garmentInput.addEventListener("change", () => previewFile(garmentInput, "garmentPreview"));
+
+    runBtn.addEventListener("click", async () => {
+      const personFile = personInput.files?.[0];
+      const garmentFile = garmentInput.files?.[0];
+      if (!personFile || !garmentFile) {
+        setStatus("Selecciona ambas imagenes primero.", false);
+        return;
+      }
+
+      runBtn.disabled = true;
+      setStatus("Procesando try-on local...", null);
+      metaEl.textContent = "";
+
+      try {
+        const form = new FormData();
+        form.append("person_image", personFile);
+        form.append("garment_image", garmentFile);
+
+        const alpha = Number(alphaRange.value);
+        const qs = new URLSearchParams({
+          alpha: String(alpha),
+          quality_mode: String(qualityMode.value || "quality"),
+          max_seconds: String(maxSeconds.value || "300"),
+          force_quality: String(Boolean(forceQuality.checked)),
+        });
+        const resp = await fetch(`/tryon/local-apply?${qs.toString()}`, {
+          method: "POST",
+          body: form,
+        });
+
+        const payload = await resp.json();
+        if (!resp.ok) {
+          throw new Error(payload.detail || "Error en endpoint local-apply");
+        }
+
+        byId("resultPreview").src = `data:${payload.mime_type};base64,${payload.image_base64}`;
+        const mode = payload.render_mode || "unknown";
+        const elapsed = payload.render_meta?.elapsed_seconds;
+        const iterations = payload.render_meta?.iterations;
+        const detail = payload.render_reason ? ` | motivo=${payload.render_reason}` : "";
+        const fallback = payload.render_status && payload.render_status !== "ok";
+        setStatus(
+          fallback
+            ? "Resultado generado con fallback heuristico; no hubo ajuste real de prenda."
+            : "Resultado generado con reemplazo segmentado local.",
+          !fallback,
+        );
+        metaEl.textContent = `backend=${payload.backend} | modo=${mode} | quality=${payload.quality_mode} | force=${payload.force_quality} | max_s=${payload.max_seconds} | alpha=${payload.alpha} | iters=${iterations ?? '-'} | elapsed_s=${elapsed ?? '-'} | salida=${payload.url}${detail}`;
+      } catch (err) {
+        setStatus(`Error: ${err.message}`, false);
+      } finally {
+        runBtn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

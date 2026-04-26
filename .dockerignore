@@ -1,0 +1,48 @@
+# Data directories - exclude from Docker context
+data/
+data_deepfasho_antiguo/
+fotos_personas/
+modelos_maniquies/
+outputs/
+sam-3d-body/
+
+# Development and temporary files
+.git/
+.gitignore
+.env
+.env.local
+*.pyc
+__pycache__/
+.pytest_cache/
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*.sublime-project
+
+# Docker and compose
+docker-compose.override.yml
+Dockerfile.dev
+
+# Node modules and npm
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs and temp
+logs/
+*.log
+tmp/
+temp/

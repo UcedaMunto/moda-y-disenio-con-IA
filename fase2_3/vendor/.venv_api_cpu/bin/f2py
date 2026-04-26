@@ -1,0 +1,6 @@
+#!/home/uceda/Documents/difusion/proyecto-alterno-desde-cero/fase2_3/vendor/.venv_api_cpu/bin/python
+import sys
+from numpy.f2py.f2py2e import main
+if __name__ == '__main__':
+    sys.argv[0] = sys.argv[0].removesuffix('.exe')
+    sys.exit(main())

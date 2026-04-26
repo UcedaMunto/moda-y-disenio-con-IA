@@ -1,0 +1,10 @@
+{
+  "look_id": "aac5ec061824",
+  "name": "ERTERT",
+  "model_path": "data/raw/models/TShirts.obj",
+  "texture_path": "data/processed/case-images/textures/candidate_01.png",
+  "garment_type": "other",
+  "project_id": "case-images",
+  "notes": "erre",
+  "created_at": 1776653720
+}
