@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError
 try:
     from pillow_heif import register_avif_opener, register_heif_opener
     register_heif_opener()
@@ -4649,6 +4649,7 @@ async def tryon_local_apply(
         try:
             img = Image.open(io.BytesIO(raw))
             img.load()  # force full decode
+            img = ImageOps.exif_transpose(img)
             return img.convert("RGBA")
         except Exception as pil_exc:
             decode_errors.append(f"PIL: {pil_exc}")
@@ -4663,6 +4664,7 @@ async def tryon_local_apply(
                 heif_file.data,
                 "raw",
             )
+            img = ImageOps.exif_transpose(img)
             return img.convert("RGBA")
         except Exception as heif_exc:
             decode_errors.append(f"HEIF: {heif_exc}")

@@ -285,11 +285,14 @@
         const iterations = payload.render_meta?.iterations;
         const detail = payload.render_reason ? ` | motivo=${payload.render_reason}` : "";
         const fallback = payload.render_status && payload.render_status !== "ok";
+        const timedOut = payload.render_reason === "time_budget_reached";
         setStatus(
           fallback
             ? "Resultado generado con fallback heuristico; no hubo ajuste real de prenda."
-            : "Resultado generado con reemplazo segmentado local.",
-          !fallback,
+            : timedOut
+              ? "Resultado generado, pero se alcanzo el tiempo maximo de busqueda (max_s)."
+              : "Resultado generado con reemplazo segmentado local.",
+          fallback ? false : (timedOut ? null : true),
         );
         metaEl.textContent = `backend=${payload.backend} | modo=${mode} | quality=${payload.quality_mode} | force=${payload.force_quality} | max_s=${payload.max_seconds} | alpha=${payload.alpha} | iters=${iterations ?? '-'} | elapsed_s=${elapsed ?? '-'} | salida=${payload.url}${detail}`;
       } catch (err) {

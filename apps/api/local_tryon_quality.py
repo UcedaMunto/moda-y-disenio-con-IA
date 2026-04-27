@@ -145,6 +145,32 @@ def _extract_source_garment(garment_rgba: np.ndarray) -> tuple[np.ndarray, np.nd
     src_mask = cv2.GaussianBlur(src_mask, (9, 9), 0)
     src_mask = (src_mask > 50).astype(np.uint8) * 255
 
+    # When the source image is a full-body person photo, keep torso-like area to avoid ghost overlays.
+    src_bbox = _bbox_from_mask(src_mask)
+    if src_bbox is not None:
+        x0, y0, x1, y1 = src_bbox
+        bw = max(1, x1 - x0 + 1)
+        bh = max(1, y1 - y0 + 1)
+        torso_window = np.zeros_like(src_mask, dtype=np.uint8)
+        wx0 = int(x0 + bw * 0.14)
+        wx1 = int(x1 - bw * 0.14)
+        wy0 = int(y0 + bh * 0.12)
+        wy1 = int(y0 + bh * 0.70)
+        torso_window[max(0, wy0):min(src_mask.shape[0], wy1), max(0, wx0):min(src_mask.shape[1], wx1)] = 255
+        torso_candidate = cv2.bitwise_and(src_mask, torso_window)
+        if float(np.mean(torso_candidate > 0)) >= 0.015:
+            src_mask = torso_candidate
+
+    # Remove skin-like regions from source so face/arms are not projected as garment.
+    hsv_src = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)
+    src_skin_1 = cv2.inRange(hsv_src, np.array([0, 35, 60], dtype=np.uint8), np.array([25, 170, 255], dtype=np.uint8))
+    src_skin_2 = cv2.inRange(hsv_src, np.array([160, 35, 60], dtype=np.uint8), np.array([180, 170, 255], dtype=np.uint8))
+    src_skin = cv2.bitwise_or(src_skin_1, src_skin_2)
+    src_skin = cv2.dilate(src_skin, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9)), iterations=1)
+    src_mask = cv2.bitwise_and(src_mask, cv2.bitwise_not(src_skin))
+    src_mask = _largest_component(src_mask)
+    src_mask = cv2.morphologyEx(src_mask, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11)), iterations=1)
+
     return rgb, src_mask
 
 
@@ -227,6 +253,15 @@ def _score_fit(candidate_mask: np.ndarray, target_mask: np.ndarray, body_mask: n
         size_penalty += 0.35
 
     return iou * 0.55 + coverage * 0.55 - outside_ratio * 0.6 - size_penalty
+
+
+def _orientation_penalty(angle_degrees: float, max_abs_angle: float) -> float:
+    """Penalize large rotations so tops remain naturally upright."""
+    ang = abs(float(angle_degrees))
+    if ang <= 6.0:
+        return 0.0
+    norm = min(1.0, (ang - 6.0) / max(1e-6, (max_abs_angle - 6.0)))
+    return norm * 0.18
 
 
 def _compose_with_shading(person_rgb: np.ndarray, warped_rgb: np.ndarray, warped_mask: np.ndarray) -> np.ndarray:
@@ -457,6 +492,7 @@ def run_local_tryon_quality(
     best_score = -1e9
     best_matrix: np.ndarray | None = None
     iterations = 0
+    max_abs_angle = 32.0
 
     # Coarse-to-fine parameter search.
     stages = [
@@ -498,6 +534,8 @@ def run_local_tryon_quality(
 
                         scale = stage_anchor_scale * float(scale_mul)
                         angle = stage_anchor_rot + float(rot_delta)
+                        if abs(angle) > max_abs_angle:
+                            continue
                         dx = stage_anchor_dx + float(dx_mul) * target_w
                         dy = stage_anchor_dy + float(dy_mul) * target_h
 
@@ -506,7 +544,7 @@ def run_local_tryon_quality(
                         matrix[1, 2] += float(target_center[1] - source_center[1] + dy)
 
                         warped_mask = _warp(source_mask, matrix, out_size, is_mask=True)
-                        score = _score_fit(warped_mask, target_mask, body_mask)
+                        score = _score_fit(warped_mask, target_mask, body_mask) - _orientation_penalty(angle, max_abs_angle)
                         iterations += 1
 
                         if score > best_score:
@@ -531,7 +569,7 @@ def run_local_tryon_quality(
 
         while time.perf_counter() < deadline:
             proposed_scale = max(0.25, min(4.0, current_scale * (1.0 + rng.normal(0.0, step_scale))))
-            proposed_angle = current_angle + rng.normal(0.0, step_rot)
+            proposed_angle = float(np.clip(current_angle + rng.normal(0.0, step_rot), -max_abs_angle, max_abs_angle))
             proposed_dx = current_dx + rng.normal(0.0, step_shift_x)
             proposed_dy = current_dy + rng.normal(0.0, step_shift_y)
 
@@ -540,7 +578,7 @@ def run_local_tryon_quality(
             matrix[1, 2] += float(target_center[1] - source_center[1] + proposed_dy)
 
             warped_mask = _warp(source_mask, matrix, out_size, is_mask=True)
-            score = _score_fit(warped_mask, target_mask, body_mask)
+            score = _score_fit(warped_mask, target_mask, body_mask) - _orientation_penalty(proposed_angle, max_abs_angle)
             iterations += 1
 
             if score > best_score:
@@ -613,12 +651,16 @@ def run_local_tryon_quality(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray(result_rgb, mode="RGB").save(out_path)
 
+    elapsed = time.perf_counter() - start
+    # Expose when optimization hits the configured time budget so UI can report it clearly.
+    timed_out = elapsed >= (budget - 0.01)
+
     return QualityTryOnResult(
         ok=True,
         mode="quality_mask_search",
         status="ok",
-        reason=None,
+        reason="time_budget_reached" if timed_out else None,
         score=float(best_score),
         iterations=iterations,
-        elapsed_seconds=time.perf_counter() - start,
+        elapsed_seconds=elapsed,
     )
